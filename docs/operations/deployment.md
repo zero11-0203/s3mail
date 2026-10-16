@@ -1,0 +1,186 @@
+# Deployment and shared validation
+
+[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+
+[DNS](#dns-and-region) · [Terraform](#terraform-conventions) · [Releases](#cicd) · [Manual setup](#steps-outside-normal-terraform-provisioning) · [Testing strategy](#validation-approach)
+
+## Scope and status
+
+**Status: proposed; implementation and validation are pending.** Owns DNS provisioning, Terraform conventions, environment/release workflow and shared testing strategy. Commands and code layout below describe planned implementation, not existing tooling. IAM policies live in [security](../specs/security.md).
+
+## Required behavior and invariants
+
+- Infrastructure and runtime artifacts must be reproducible and pinned.
+- One environment uses local pre-deploy tests and owner-run positive release acceptance.
+- Initial plans have no enabled webmail resources or webmail deployment prerequisites.
+- Stateful replacements require detection and deliberate repair; code rollback does not reverse data or infrastructure.
+
+## Design
+
+Use Terraform with the `hashicorp/aws` provider to define:
+
+1. DNS: the Route 53 hosted zone and all records, from the merged declarations of each module (`dns` module).
+2. Required SES receiving domain identity/ownership verification and the DMARC record.
+3. Inbound SES receipt rules (`aws_ses_receipt_rule_set`, `aws_ses_receipt_rule`, `aws_ses_active_receipt_rule_set`) and the declared MX record.
+4. Outbound relay: `relay-smtp2go` module declaring the sender-domain CNAMEs, plus the webhook endpoint and its secret; the active-relay SSM parameter. Future relays get their own `relay-*` module.
+5. Separate S3 storage for permanently retained originals, disposable uploads/derived objects and indexes; encryption, lifecycle policies and least-privilege access follow the [retention contract](recovery.md#original-mail-retention).
+6. SES S3-action SNS topic, restricted SNS/SQS policies, ingestion and work queues/DLQs, processing/bounce/dispatcher Lambdas and recovery schedules.
+7. DynamoDB mail/security tables, transaction/change/outbox records, Streams wake-ups and PITR explicitly disabled. No backup/export storage or scheduled backup jobs are provisioned.
+8. Regional REST API Gateway, common Lambda authorizer and JMAP service, with every Lambda deployed as a published version behind a `live` alias; `STREAM` integrations for API responses, EventSource and downloads. Every integration, event-source mapping and invoke permission targets its alias explicitly.
+9. Search: versioned S3 index prefix with the [search retention policy](../specs/search.md#index-pipeline), SQS wake-up queue/DLQ, indexer Lambda (reserved concurrency 1), separate search Lambda and sufficient scratch space.
+10. Cognito User Pool, the initial terminal OAuth app client (redirect URIs, PKCE), and resource server with the `mail.read`, `mail.write` and `mail.submit` scopes. Add the browser app client only with Phase 4.
+11. Observability and operations: explicit CloudWatch log groups with retention, alarms and their SNS topic, the dashboard, saved Logs Insights queries, X-Ray active tracing on every Lambda and the API Gateway stage, X-Ray sampling rules and the AWS Budgets alert.
+12. **Phase 4 only:** optional webmail module for the ECR repository, Lambda container/Web Adapter, execution role/session secrets, webmail REST gateway/custom domain/ACM/DNS, Cognito app client and CORS registration. `webmail_enabled = false` initially; disabled resources are absent from plans, deployment checks and the initial cost baseline.
+
+### DNS and region
+
+DNS is hosted in **Amazon Route 53** and every record is managed by Terraform. Cost is about $0.50/month for the hosted zone plus well under $0.40/month in queries at personal volume.
+
+- **Record declarations:** every enabled module that needs DNS (`mail-inbound`, `relay-*`, `jmap-api`, `auth`, and `webmail` from Phase 4) exposes a `dns_records` output: a list of `{name, type, ttl, values, purpose}` entries. A single `dns` module owns the hosted zone and turns the merged list into `aws_route53_record`s. The optional webmail module emits no records while disabled. Keeping declarations separate from Route 53 resources means records are defined in one place per feature and the DNS host could change later by replacing only the `dns` module.
+- **Portable records only:** use standard record types (MX, TXT, CNAME, SRV, A/AAAA where needed); no Route 53 alias records, health checks or routing policies. Public HTTP endpoints use subdomains with plain CNAMEs for gateway custom domains, never an apex CNAME. Add `webmail.example.com` and its certificate in Phase 4. JMAP autodiscovery uses the standard SRV record `_jmap._tcp.example.com` (RFC 8620 §2.2) pointing at the JMAP host.
+- **Certificates:** ACM certificates for the API custom domains use DNS validation; Terraform creates the validation records and waits for validation in the same apply.
+- **Verification:** after every deploy, CI resolves every declared record through public resolvers and fails if any is missing or different ([release checks](#cicd)), which also catches a broken delegation.
+
+**Registration and delegation:** keep the domain at its current registrar; registrar and DNS host are independent. Before delegating, copy any existing records in use into the Terraform declarations, apply, check the new zone answers correctly, then change the nameservers at the registrar to the zone's four Route 53 nameservers once, by hand. Transferring the registration to AWS is optional and not required.
+
+**Mail records:** SES is used only to receive mail. The `mail-inbound` module declares the **inbound MX record for the SES receiving endpoint** and the required SES domain identity and TXT ownership-verification record, using the SES domain-identity API. Receiving requires ownership verification; see [SES receiving domain verification](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-verification.html). SES sending DKIM and custom MAIL FROM records are unnecessary. Sending-side records (DKIM, return path, SPF) are declared by the relay module ([mail flow](../specs/mail-flow.md#design)), and a DMARC TXT record is declared explicitly.
+
+SES inbound receipt is available only in some regions, so the region choice follows from it.
+
+### Queue configuration
+
+- **Queue settings:** `ReportBatchItemFailures` so one bad message does not retry the whole batch; visibility timeout at least six times the Lambda timeout; `maxReceiveCount` of about 5 before the dead-letter queue, which is [alarmed](monitoring.md#alarms-and-dashboard).
+
+### Terraform conventions
+
+- **Remote state:** store state in a dedicated, versioned and encrypted S3 bucket with S3-native locking (`use_lockfile = true`, Terraform 1.10+). A separate `bootstrap` configuration, applied by hand, creates that bucket, the GitHub OIDC provider, the CI roles and the artifact bucket ([CI identity](../specs/security.md#ci-identity)).
+- **Secrets and state:** Terraform state contains every value it manages in plain form. Do not let it generate or hold relay SMTP passwords, webhook secrets or other long-lived secrets; set those out of band and store them in Secrets Manager, with Terraform creating only the empty secret and the IAM access to it. Restrict who can read the state bucket.
+- **Pin versions:** pin Terraform and every provider in `required_providers` and commit `.terraform.lock.hcl`.
+- **Protect data:** set `lifecycle { prevent_destroy = true }` on the hosted zone, message bucket, DynamoDB tables and Cognito User Pool. Enable S3 versioning; leave DynamoDB point-in-time recovery disabled for the current scope. The original bucket has no current/noncurrent expiration, no force-empty behavior and no original-delete IAM grants; disposable cleanup cannot target it.
+- **IAM creation:** every created role and policy follows the [IAM requirements and component inventory](../specs/security.md#iam-role-requirements); include permission changes in the reviewed Terraform plan and validate both allowed and denied operations.
+- **Build separately from deploy:** Terraform does not compile code. Build the Go Lambda zips in a separate step (Makefile or CI); from Phase 4, build the webmail container separately and pass its immutable ECR digest. Plans then reflect the exact deployed artifacts.
+- **Layout:** a single root configuration (one [environment](#environment)) calling small modules (`dns`, `mail-inbound`, `mail-outbound`, `relay-smtp2go`, `jmap-api`, `search`, `auth`, `ops`); add the optional `webmail` module in Phase 4. The initial root exposes no active webmail resources.
+
+### Planned code layout
+
+```text
+infra/
+  bootstrap/      State bucket, GitHub OIDC provider, CI roles and permissions boundary, artifact bucket (applied by hand)
+  main/           Core modules; optional webmail module introduced in Phase 4
+go/
+  cmd/            Lambda entry points (ingest, dispatch, index, search, jmap, push, submit, bounce, maintenance, canary) and mail-auth/mail-admin CLIs
+  internal/       JMAP protocol, MIME parsing, storage, search index and text segmentation, relay interface and adapters (smtp, fake)
+testdata/         Synthetic MIME corpus, recorded client sessions, search queries, fixture generator
+docs/             Architecture, roadmap, topic specs, operations guides
+README.md         Project overview; docs/README.md is the documentation index
+AGENTS.md         Coding-task routing and repository guidance
+webmail/          Phase 4: upstream/adapter version locks, Lambda Dockerfile and browser acceptance fixtures
+```
+
+### Environment
+
+There is **one deployed environment**, in one AWS account, serving as both production and the place where changes are verified after deploy. A personal project does not justify a second copy of DNS, Cognito and relay setup. Development happens locally against the test harness ([validation approach](deployment.md#validation-approach)), which runs every Go handler and the relay adapters against local fakes; nothing is deployed until it passes there.
+
+The pipeline combines pre-merge tests, a destructive-change plan check, gated infrastructure changes, automatic negative/infrastructure checks and an **owner-run positive acceptance check after each deployment**. Initially use aerc plus `mail-auth`/`mail-admin` and synthetic mail; browser checks join the checklist only after webmail is enabled in Phase 4. CI receives no personal-mail token and cannot read mailbox data. Mark a release verified only after the applicable owner checklist passes. This is a release test, not an additional deployment approval gate. Phase 0 validates the real infrastructure before primary-mail cutover; later changes reach production before this check, a deliberate single-environment tradeoff.
+
+### CI/CD
+
+```mermaid
+flowchart LR
+    PR["Pull request"] --> CHECKS["Lint, unit, component and<br/>local system tests, scans"]
+    CHECKS --> PLAN["terraform plan<br/>sanitized summary in PR"]
+    MERGE["Merge to main"] --> BUILD["Build once, tagged by commit SHA<br/>Go zips → S3; Phase 4 image → ECR"]
+    BUILD --> MPLAN["terraform plan → saved plan file<br/>+ destructive-change check"]
+    MPLAN --> KIND{"Only code versions<br/>changed?"}
+    KIND -->|yes| APPLY["Apply saved plan"]
+    KIND -->|no| GATE["Manual approval"] --> APPLY
+    APPLY --> SMOKE["Automatic infrastructure/negative checks"]
+    SMOKE --> ACCEPT["Owner positive acceptance → verified release"]
+```
+
+**Pull requests** (GitHub Actions, jobs filtered by changed paths) run the PR tiers of the testing strategy ([validation approach](deployment.md#validation-approach)):
+
+- **Go:** `go vet`, `golangci-lint`, unit, fuzz-corpus, component and local system tests; build `provided.al2023` arm64 binaries.
+- **Terraform:** `terraform fmt -check`, `terraform validate`, `tflint`, `checkov`, `terraform test`, and an AWS-backed plan only for trusted same-repository PRs. Post a sanitized resource/action summary, never the raw plan or state. Saved binary/JSON plans are restricted deployment artifacts with seven-day expiry; their access is audited. Fork PRs run offline checks without credentials.
+- **Security:** `gitleaks` (essential in a public repository), `govulncheck`, and `trivy` filesystem scanning of dependencies. Add webmail image/dependency scans and browser integration jobs when its module is introduced in Phase 4.
+
+**Merge to `main`:**
+
+1. **Build once.** Go Lambda zips are uploaded to a versioned S3 artifact bucket, keyed by commit SHA. Terraform receives these versions as variables. From Phase 4, the webmail build job also pushes a pinned image to ECR and records its digest, upstream commit and adapter version in the release manifest. Initial builds require no webmail image or ECR push.
+2. **Plan and check.** `terraform plan` writes a plan file. A script over `terraform show -json` fails the run if any stateful resource would be deleted or replaced: the hosted zone and the MX record, message and index buckets, DynamoDB tables, Cognito user pool, SES identity and receipt rules. This complements `prevent_destroy`, which does not catch moves or renames. Reject disabling original-bucket versioning, enabling force-empty/expiration, or adding original-object/version deletion grants as well.
+3. **Apply.** If the plan only changes deployed Lambda code versions/aliases (including a webmail image digest after Phase 4), it is applied automatically under the code-deploy role. Any other change, including enabling webmail or modifying DNS, requires manual approval through a protected GitHub environment. The job applies the **saved plan file**, so what was approved is exactly what runs.
+4. **Automatic post-deploy checks** without mailbox access: DNS declarations resolve correctly; unauthenticated discovery returns the documented `401`; negative auth cases fail on every route; active SES rules match the deployment; all triggers/integrations point to the expected aliases; and the mail-loop check below passes. A failure reverts code aliases together and reports infrastructure actions that require separate repair.
+5. **Mail-loop check:** CI invokes only the canary entry point, which generates and stores a fresh random nonce, send time and deployment version. It sends through the normal durable relay workflow to reserved `canary@`. Ingestion validates the exact outstanding nonce/version and deadline, marks that run received conditionally, emits a heartbeat and omits the synthetic message from the active mailbox. Its original raw S3 object remains permanently retained; it is not a cleanup exception. Replay, unrelated mail or an earlier deployment's heartbeat cannot satisfy the check. Read only the run's pass/fail control record through the canary API, not raw mail or mailbox items. This proves the transport path, not persistent mailbox/JMAP correctness.
+6. **Deliverability check,** only when the plan changed DNS records or relay resources: send through the active relay to an external checker and confirm DKIM, SPF and DMARC pass ([validation approach](deployment.md#validation-approach)).
+7. **Positive acceptance:** initially the owner logs in through `mail-auth`, uses aerc and runs local `mail-admin acceptance` with the owner's OAuth token. Receive a uniquely marked synthetic mail, confirm get/query/changes and alias routing, upload/download an attachment, move/mark/search it after indexing, send and verify Sent/submission state, then delete the fixture from the active mailbox while retaining its original S3 object. Verify token refresh; use the protocol harness for push/reconnect features the CLI does not expose, and two independent CLI sessions for shared state. Once webmail is enabled, add its browser-specific gate ([clients](../specs/clients.md#design)) and CLI/browser shared-state checks. The helper returns a content-free release result; no owner token or mailbox response reaches CI. A failed applicable check leaves the release unverified and triggers rollback/repair. Missing deferred browser checks do not block a core release.
+
+**No scheduled synthetic tests:** keep the original preference for PR/deployment-triggered checks. Between deployments, real-traffic alarms cannot distinguish a quiet mailbox from an upstream outage that emits no events; this policy leaves a documented detection gap. One-minute work-recovery sweeps and garbage collection are scheduled operational jobs, not synthetic tests. Monitor their completion/age so a stopped maintenance path is visible.
+
+**Rollback:** publish every Lambda version behind `live`; retain the prior release manifest and revert the related aliases as one release, with triggers/integrations pinned to those aliases. CI records the manifest used, and the next Terraform plan reconciles emergency alias drift. Retain immutable artifacts and, after Phase 4, prior webmail images/digests referenced by retained releases. Alias rollback does not reverse DNS, IAM, receipt rules, relay settings or data changes: inspect the saved plan and use their documented repair steps. Schema/data-format changes ship in compatible stages (read both formats, migrate, then remove old support in a later release), with rehearsed synthetic backfills. Incompatible data restoration uses [recovery](recovery.md#design) and outbound pause, never a blind replay of send attempts.
+
+**Access:**
+
+- GitHub OIDC with no stored AWS keys: separate plan, code-deploy and gated infrastructure-deploy roles (see [CI identity](../specs/security.md#ci-identity)).
+- Pull requests from forks get no AWS access: use the `pull_request` trigger, never `pull_request_target`.
+- Pin third-party actions to commit SHAs; Renovate (or Dependabot) updates actions, Go modules and Terraform providers.
+- Branch protection on `main`: required checks, no direct pushes.
+- Changes to `infra/bootstrap/` are applied by hand by the owner, never by CI.
+
+**Other workflows:**
+
+- **CLI releases:** `goreleaser` on version tags publishes `mail-auth` binaries for macOS and Linux to GitHub Releases.
+- **Drift:** there is no scheduled drift check. Every AWS-authorized PR plan and deployment plan shows drift from manual changes; fork PRs run offline checks. Deployment plans are applied only after the destructive-change check.
+
+A later AI agent project would add its own build, test and evaluation jobs to this pipeline.
+
+### Steps outside normal Terraform provisioning
+
+- Apply the `bootstrap` configuration with an IAM Identity Center admin session, migrate its state into the new bucket, and set the role ARNs and region as GitHub repository variables; create the `production` and `production-gated` GitHub environments.
+- Delegate the domain's nameservers at the registrar to the Route 53 hosted zone, once, after the zone is populated and verified.
+- Sign up for SMTP2GO, add and verify the sender domain, configure the bounce/complaint webhook, and store the SMTP credentials and webhook secret in Secrets Manager.
+- Create and enroll the personal Cognito user in MFA.
+- Enroll independent recovery methods and run Phase 0 client/transport checks using aerc. In Phase 4, set any webmail session secret out of band in Secrets Manager and validate its browser login configuration; no VM management key is required.
+- Rehearse [recovery](recovery.md#failure-handling) and the owner positive acceptance checklist before directing primary mail here.
+
+Do not accidentally delete the hosted zone, message bucket, DynamoDB content or Cognito User Pool during routine `terraform apply` runs. Follow the original-retention policy; additional backup infrastructure is out of scope.
+
+## Failure handling
+
+Use the coordinated alias rollback and staged schema procedure in CI/CD above. Failed positive acceptance leaves a release unverified. Repair infrastructure separately from aliases. For incompatible data restoration, pause outbound delivery and follow [recovery](recovery.md#failure-handling).
+
+## Acceptance checks
+
+- `terraform test` per module: encryption and versioning on, `prevent_destroy` present, Lambdas published behind the `live` alias, no NAT gateway.
+- `terraform test` verifies no additional backup resources/jobs and disabled DynamoDB PITR.
+- Unit tests for the destructive-change check against sample plan JSON files, including original-bucket expiration/versioning changes and accidental original-delete grants.
+- **DNS declarations:** `terraform test` asserts the merged record set (MX, SPF, DKIM, DMARC, SRV, ACM validation) is complete, uses only portable record types and has no apex CNAME.
+- **Deliverability:** in deployments that change DNS records or relay resources, send through the active relay to an external checker and confirm DKIM, SPF and DMARC pass.
+- **Release failure injection:** break successful-token validation and normal mailbox persistence while preserving negative-auth/canary behavior. Positive acceptance must fail. Delayed prior canaries cannot pass a new run. Test coordinated alias rollback and document infrastructure changes it cannot undo.
+
+Run topic acceptance checks listed in the [roadmap](../roadmap.md#release-gates). Regional availability, pinned runtime/provider integration and actual deployed behavior must be proven during Phase 0; browser packaging is deferred to Phase 4.
+
+## Validation approach
+
+Tests are organized around JMAP consistency, MIME handling, authorization and the relay boundary. The local harness is also the development environment. Deployed CI checks need no mailbox access; the owner separately runs positive acceptance with synthetic mail and normal OAuth credentials ([release workflow](#cicd)).
+
+### Tiers
+
+| Tier | Where / when | Scope |
+| --- | --- | --- |
+| Unit and fuzz | Every PR, seconds | Parsers, algorithms, error classification |
+| Component | Every PR, ~1 minute | One Lambda handler against DynamoDB Local and an S3-compatible store (`testcontainers-go`) |
+| Local system | Every PR, minutes | All Go handlers wired together in one local HTTP harness: ingest → JMAP → push → submit → bounce, with recorded SES inbound events, the `fake` relay adapter and a local SMTP sink (e.g. Mailpit) |
+| Interoperability | Every PR (available replays); owner checklist per release | aerc first; browser fixtures and checks added in Phase 4 |
+| Post-deploy CI | Deployed environment, every deployment | Infrastructure/negative-auth checks, nonce-bound transport canary and conditional deliverability checks |
+| Positive acceptance | Owner-run after every deployment; CLI slice in Phase 0 | aerc + protocol helper: auth/refresh, persistent synthetic mail, get/query/changes, blobs, search, submission and safe cleanup; add browser acceptance only when deployed |
+| Recovery/scale | Before primary cutover and after relevant storage changes | Isolated synthetic rebuilds with/without metadata, deletion/GC races, 50,000-message search benchmark and index-version accounting |
+
+Handlers are invoked directly with recorded SES S3-action SNS envelopes, SQS/Streams events and SMTP2GO webhook payloads locally, rather than through LocalStack. Real AWS acceptance covers behavior absent from these fakes.
+
+### Test data rules
+
+- Only synthetic or public-domain mail in the repository; never real messages. `gitleaks` does not catch personal content, so this is a review rule.
+- A fixture generator in `testdata/` produces large synthetic mailboxes for property tests, search evaluation and local development.
+
+**Priority if time is short:** the authorization matrix, sync property tests and MIME corpus come first, since they guard against leaking or corrupting mail; recorded client replays next.
+
