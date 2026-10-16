@@ -9,6 +9,11 @@ variable "project" {
   default     = "s3mail"
 }
 
+variable "domain" {
+  description = "Mail domain served by the Route 53 hosted zone (set in terraform.tfvars)."
+  type        = string
+}
+
 variable "spike_stream_enabled" {
   description = "Deploy the Phase 0 response-streaming spike."
   type        = bool

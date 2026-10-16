@@ -3,6 +3,7 @@
 
 GOLANGCI_LINT ?= golangci-lint
 TF_DIRS := infra/bootstrap infra/main
+TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
 .PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets spike-build
 
@@ -32,6 +33,11 @@ tf-check:
 		echo "terraform validate $$d"; \
 		terraform -chdir=$$d init -backend=false -input=false >/dev/null && \
 		terraform -chdir=$$d validate || exit 1; \
+	done
+	@for d in $(TF_TEST_DIRS); do \
+		echo "terraform test $$d"; \
+		terraform -chdir=$$d init -backend=false -input=false >/dev/null && \
+		terraform -chdir=$$d test || exit 1; \
 	done
 
 secrets:

@@ -3,6 +3,11 @@ output "spike_stream_invoke_url" {
   value       = one(module.spike_stream[*].invoke_url)
 }
 
+output "dns_name_servers" {
+  description = "Route 53 nameservers to set at the registrar."
+  value       = module.dns.name_servers
+}
+
 output "auth" {
   description = "Values mail-auth and the authorizer need."
   value = {

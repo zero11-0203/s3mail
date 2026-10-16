@@ -14,6 +14,15 @@ module "spike_stream" {
   scopes         = module.auth.scopes
 }
 
+# The hosted zone for the whole domain. Modules add dns_records outputs to
+# this list as they are introduced (mail-inbound, relay-*, jmap-api).
+module "dns" {
+  source = "../modules/dns"
+
+  zone_name = var.domain
+  records   = []
+}
+
 module "auth" {
   source = "../modules/auth"
 

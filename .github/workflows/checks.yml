@@ -55,6 +55,13 @@ jobs:
             terraform -chdir="$d" init -backend=false -input=false
             terraform -chdir="$d" validate
           done
+      - name: terraform test
+        run: |
+          for d in infra/modules/*/tests; do
+            d="${d%/tests}"
+            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" test
+          done
 
   secrets:
     runs-on: ubuntu-24.04
