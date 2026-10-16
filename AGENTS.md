@@ -78,7 +78,8 @@ Read the relevant owning document and its acceptance checks before making change
 ## Validation and reporting
 
 - Use trunk-based development: commit directly to `main` (no feature branches);
-  run the available local checks before pushing.
+  run `make check` before pushing (needs Go, Terraform, golangci-lint and gitleaks;
+  CI runs the same checks in `.github/workflows/checks.yml`).
 
 - Follow the owning topic's acceptance checks and deployment validation tiers.
 - Use the actual repository toolchain once it exists; do not invent runnable
