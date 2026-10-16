@@ -8,6 +8,15 @@ output "dns_name_servers" {
   value       = module.dns.name_servers
 }
 
+output "mail_inbound" {
+  description = "Receiving resources the ingestion Lambda and checks need."
+  value = {
+    recipients       = module.mail_inbound.recipients
+    originals_bucket = module.mail_inbound.originals_bucket
+    ingest_queue_url = module.mail_inbound.ingest_queue_url
+  }
+}
+
 output "auth" {
   description = "Values mail-auth and the authorizer need."
   value = {

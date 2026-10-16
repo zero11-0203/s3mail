@@ -20,7 +20,21 @@ module "dns" {
   source = "../modules/dns"
 
   zone_name = var.domain
-  records   = []
+  records   = module.mail_inbound.dns_records
+}
+
+module "mail_inbound" {
+  source = "../modules/mail-inbound"
+
+  domain  = var.domain
+  aliases = var.mail_aliases
+}
+
+# Waits until SES sees the _amazonses TXT record the dns module published.
+resource "aws_ses_domain_identity_verification" "inbound" {
+  domain = module.mail_inbound.domain_identity
+
+  depends_on = [module.dns]
 }
 
 module "auth" {

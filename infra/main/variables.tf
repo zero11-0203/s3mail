@@ -14,6 +14,11 @@ variable "domain" {
   type        = string
 }
 
+variable "mail_aliases" {
+  description = "Local parts that receive mail at the domain (set in terraform.tfvars); canary is added automatically."
+  type        = list(string)
+}
+
 variable "spike_stream_enabled" {
   description = "Deploy the Phase 0 response-streaming spike."
   type        = bool

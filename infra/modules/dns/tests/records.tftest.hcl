@@ -6,7 +6,7 @@ variables {
   zone_name = "example.com"
   records = [
     { name = "", type = "MX", ttl = 300, values = ["10 inbound-smtp.us-east-1.amazonaws.com"], purpose = "SES receiving" },
-    { name = "_dmarc", type = "TXT", ttl = 300, values = ["\"v=DMARC1; p=none\""], purpose = "DMARC" },
+    { name = "_dmarc", type = "TXT", ttl = 300, values = ["v=DMARC1; p=none"], purpose = "DMARC" },
     { name = "_jmap._tcp", type = "SRV", ttl = 300, values = ["0 1 443 jmap.example.com"], purpose = "JMAP autodiscovery" },
     { name = "jmap", type = "CNAME", ttl = 300, values = ["d-abc123.execute-api.us-east-1.amazonaws.com"], purpose = "API custom domain" },
   ]
@@ -69,8 +69,8 @@ run "rejects_duplicate_name_and_type" {
 
   variables {
     records = [
-      { name = "", type = "TXT", ttl = 300, values = ["\"a\""], purpose = "one" },
-      { name = "", type = "TXT", ttl = 300, values = ["\"b\""], purpose = "two" },
+      { name = "", type = "TXT", ttl = 300, values = ["a"], purpose = "one" },
+      { name = "", type = "TXT", ttl = 300, values = ["b"], purpose = "two" },
     ]
   }
 
@@ -83,7 +83,7 @@ run "rejects_cname_sharing_a_name" {
   variables {
     records = [
       { name = "jmap", type = "CNAME", ttl = 300, values = ["x.example.net"], purpose = "one" },
-      { name = "jmap", type = "TXT", ttl = 300, values = ["\"x\""], purpose = "two" },
+      { name = "jmap", type = "TXT", ttl = 300, values = ["x"], purpose = "two" },
     ]
   }
 
@@ -95,6 +95,16 @@ run "rejects_fqdn_names" {
 
   variables {
     records = [{ name = "www.example.com.", type = "A", ttl = 300, values = ["192.0.2.1"], purpose = "bad" }]
+  }
+
+  expect_failures = [var.records]
+}
+
+run "rejects_quoted_txt_values" {
+  command = plan
+
+  variables {
+    records = [{ name = "_dmarc", type = "TXT", ttl = 300, values = ["\"v=DMARC1; p=none\""], purpose = "bad" }]
   }
 
   expect_failures = [var.records]

@@ -26,6 +26,7 @@ Each spec owns its requirements, failure behavior and acceptance checks. Read th
 Measured Phase 0 results; requirements stay in the owning specs.
 
 - [REST API response streaming spike](evidence/phase0-streaming-spike.md)
+- [SES receiving](evidence/phase0-ses-receiving.md)
 
 ## Operations
 

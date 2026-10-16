@@ -11,8 +11,9 @@ variable "zone_name" {
 variable "records" {
   description = <<-EOT
     Merged dns_records declarations from the enabled modules. name is relative
-    to the zone ("" for the apex); values use Route 53 syntax (TXT values
-    quoted, MX "<priority> <host>", SRV "<priority> <weight> <port> <host>").
+    to the zone ("" for the apex); values use Route 53 syntax (MX
+    "<priority> <host>", SRV "<priority> <weight> <port> <host>") except TXT
+    values, which are unquoted: the provider adds the quotes.
   EOT
   type = list(object({
     name    = string
@@ -22,6 +23,11 @@ variable "records" {
     purpose = string
   }))
   default = []
+
+  validation {
+    condition     = alltrue(flatten([for r in var.records : [for v in r.values : !startswith(v, "\"") if r.type == "TXT"]]))
+    error_message = "TXT values are unquoted; the provider adds the quotes."
+  }
 
   validation {
     condition     = alltrue([for r in var.records : contains(["A", "AAAA", "CAA", "CNAME", "MX", "SRV", "TXT"], r.type)])

@@ -1,5 +1,6 @@
 # Copy to terraform.tfvars (gitignored) and fill in.
 # region: any SES email receiving region, the same one in every configuration.
-region = "us-east-1"
-domain = "example.com"
+region             = "us-east-1"
+domain             = "example.com"
+mail_aliases       = ["alice"]
 auth_domain_prefix = "s3mail-<random suffix>"
