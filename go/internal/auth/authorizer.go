@@ -49,8 +49,11 @@ func allow(c Claims, methodArn string) events.APIGatewayCustomAuthorizerResponse
 		},
 		Context: map[string]any{
 			"sub":      c.Subject,
+			"username": c.Username,
 			"clientId": c.ClientID,
 			"scope":    strings.Join(c.Scopes, " "),
+			// Push closes its stream when the token expires.
+			"exp": c.Expires.Unix(),
 		},
 	}
 }

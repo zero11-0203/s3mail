@@ -173,9 +173,15 @@ func TestParseHeaders(t *testing.T) {
 }
 
 func TestParseHeadersBounds(t *testing.T) {
-	t.Run("legacy charset kept raw", func(t *testing.T) {
+	t.Run("legacy charset decoded", func(t *testing.T) {
 		h, _ := ParseHeaders([]byte("Subject: =?Shift_JIS?B?gmCCYA==?=\n\nx"), false)
-		if h.Subject != "=?Shift_JIS?B?gmCCYA==?=" || !slices.Contains(h.Incomplete, "charset") {
+		if h.Subject != "ＡＡ" || len(h.Incomplete) != 0 {
+			t.Errorf("subject %q incomplete %v", h.Subject, h.Incomplete)
+		}
+	})
+	t.Run("unknown charset kept raw", func(t *testing.T) {
+		h, _ := ParseHeaders([]byte("Subject: =?x-unknown?B?gmCCYA==?=\n\nx"), false)
+		if h.Subject != "=?x-unknown?B?gmCCYA==?=" || !slices.Contains(h.Incomplete, "charset") {
 			t.Errorf("subject %q incomplete %v", h.Subject, h.Incomplete)
 		}
 	})

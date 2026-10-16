@@ -53,3 +53,32 @@ variable "terminal_callback_urls" {
   type        = list(string)
   default     = ["http://localhost:53789/callback"]
 }
+
+variable "owner_subject" {
+  description = "The owner's Cognito sub, mapped to the mail account (set in terraform.tfvars)."
+  type        = string
+}
+
+variable "authorizer_zip" {
+  description = "Path to the bearer-token authorizer Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/authorizer/bootstrap.zip"
+}
+
+variable "jmap_api_zip" {
+  description = "Path to the jmap-api Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/jmap-api/bootstrap.zip"
+}
+
+variable "jmap_download_zip" {
+  description = "Path to the jmap-download Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/jmap-download/bootstrap.zip"
+}
+
+variable "jmap_push_zip" {
+  description = "Path to the jmap-push Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/jmap-push/bootstrap.zip"
+}

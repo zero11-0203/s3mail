@@ -30,6 +30,7 @@ var ErrInvalidToken = errors.New("invalid token")
 // Claims are the verified fields handlers use for authorization.
 type Claims struct {
 	Subject  string
+	Username string
 	ClientID string
 	Scopes   []string
 	Expires  time.Time
@@ -62,6 +63,7 @@ type header struct {
 type claims struct {
 	Iss      string `json:"iss"`
 	Sub      string `json:"sub"`
+	Username string `json:"username"`
 	TokenUse string `json:"token_use"`
 	ClientID string `json:"client_id"`
 	Scope    string `json:"scope"`
@@ -135,6 +137,7 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Claims, error) {
 
 	return Claims{
 		Subject:  c.Sub,
+		Username: c.Username,
 		ClientID: c.ClientID,
 		Scopes:   strings.Fields(c.Scope),
 		Expires:  time.Unix(*c.Exp, 0),

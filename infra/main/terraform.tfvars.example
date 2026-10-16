@@ -4,3 +4,5 @@ region             = "us-east-1"
 domain             = "example.com"
 mail_aliases       = ["alice"]
 auth_domain_prefix = "s3mail-<random suffix>"
+# The owner's Cognito sub: aws cognito-idp admin-get-user ... (Attributes, Name=sub).
+owner_subject      = "00000000-0000-4000-8000-000000000000"

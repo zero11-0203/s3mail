@@ -22,7 +22,7 @@ The server targets the JMAP standards, not particular clients: implement the req
 
 Serve JMAP session discovery at `/.well-known/jmap`.
 
-The implementation maintains a checked-in conformance matrix, with an RFC section, scope/side-effect policy, limits and test for every method below. A capability is advertised only when its required behavior passes; unsupported optional behavior returns the specified error instead of silently succeeding.
+The implementation maintains a checked-in [conformance matrix](jmap-conformance.md), with an RFC section, scope/side-effect policy, limits and test for every method below. A capability is advertised only when its required behavior passes; unsupported optional behavior returns the specified error instead of silently succeeding.
 
 | Capability / type | Required implementation coverage |
 | --- | --- |

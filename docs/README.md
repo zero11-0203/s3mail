@@ -17,6 +17,7 @@ Each spec owns its requirements, failure behavior and acceptance checks. Read th
 | Receipt, aliases, MIME limits, outbound relay and bounces | [Mail flow](specs/mail-flow.md) |
 | Account model, DynamoDB transactions, sync state and outbox | [Storage and sync](specs/storage-sync.md) |
 | Protocol coverage, push, limits and blobs | [JMAP](specs/jmap.md) |
+| Implemented JMAP methods, limits and tests | [JMAP conformance matrix](specs/jmap-conformance.md) |
 | Cognito, endpoint/method authorization, IAM and CI trust | [Security](specs/security.md) |
 | SQLite indexing, multilingual matching, retention and cost | [Search](specs/search.md) |
 | aerc, OAuth helpers, deferred webmail and display safety | [Clients](specs/clients.md) |
@@ -27,6 +28,7 @@ Measured Phase 0 results; requirements stay in the owning specs.
 
 - [REST API response streaming spike](evidence/phase0-streaming-spike.md)
 - [SES receiving](evidence/phase0-ses-receiving.md)
+- [aerc read slice](evidence/phase0-aerc-slice.md)
 
 ## Operations
 

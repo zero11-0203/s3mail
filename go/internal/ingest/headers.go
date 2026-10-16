@@ -5,12 +5,13 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"mime"
 	"net/mail"
 	"net/textproto"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/zero11-0203/s3mail/go/internal/mailparse"
 )
 
 // Header-projection bounds (docs/specs/mail-flow.md#recipient-and-processing-policy).
@@ -94,10 +95,10 @@ func headerEnd(b []byte) int {
 	return -1
 }
 
-// decoder handles RFC 2047 words in UTF-8, US-ASCII and ISO-8859-1. Legacy
-// charsets (GBK, Shift_JIS, ...) need the full MIME parser; until then the
-// raw text is kept and the projection marked incomplete.
-var decoder = &mime.WordDecoder{}
+// decoder handles RFC 2047 words in UTF-8 and the legacy charsets the
+// mailparse package knows; an unknown charset keeps the raw text and marks
+// the projection incomplete.
+var decoder = mailparse.WordDecoder
 
 func (h *Headers) decode(s string) string {
 	d, err := decoder.DecodeHeader(s)

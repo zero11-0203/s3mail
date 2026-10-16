@@ -29,3 +29,12 @@ output "auth" {
     callback_url       = var.terminal_callback_urls[0]
   }
 }
+
+output "jmap" {
+  description = "JMAP endpoints for aerc and probes."
+  value = {
+    session_url           = "${module.jmap_api.base_url}/.well-known/jmap"
+    resource_metadata_url = module.jmap_api.resource_metadata_url
+    function_names        = module.jmap_api.function_names
+  }
+}
