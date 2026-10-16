@@ -104,13 +104,13 @@ GitHub Actions authenticates to AWS with **OpenID Connect**: each job exchanges 
 3. The plan, code-deploy and infrastructure-deploy roles and the permissions boundary below.
 4. Bootstrap starts with local state; after the first apply, its state is moved into the new bucket with `terraform init -migrate-state`.
 
-**GitHub environments:** `production` (no reviewers) is used by the build, plan, code-only apply and post-deploy jobs on `main`; `production-gated` (required reviewer: the owner) is used by the apply job when the plan contains more than code-version changes ([CI/CD](../operations/deployment.md#cicd) step 3).
+**GitHub environments:** `production` (no reviewers) is used by the build, code-only apply and post-deploy jobs on `main`; the plan job declares no environment, so its branch subject cannot assume either deployment role; `production-gated` (required reviewer: the owner) is used by the apply job when the plan contains more than code-version changes ([CI/CD](../operations/deployment.md#cicd) step 3).
 
 **Roles:**
 
 | Role | Trusted subject (`token.actions.githubusercontent.com:sub`) | Permissions |
 | --- | --- | --- |
-| `ci-plan` | Same-repository `pull_request`, plus `environment:production` for main planning | Project control-plane describe/list/get configuration only; read exact Terraform state keys and list their prefix; write/delete the exact lock key; no mailbox data-plane reads |
+| `ci-plan` | `repo:<owner>/<repo>:ref:refs/heads/main` (the plan job on `main`, which declares no environment) | Project control-plane describe/list/get configuration only; read exact Terraform state keys and list their prefix; write/delete the exact lock key; no mailbox data-plane reads |
 | `ci-code-deploy` | `repo:<owner>/<repo>:environment:production` | Plan-role reads/state locking plus artifact-prefix writes and named deployed Lambda code publication/alias updates; webmail added in Phase 4; canary invocation; no infrastructure configuration/IAM/DNS changes |
 | `ci-infra-deploy` | `repo:<owner>/<repo>:environment:production-gated` | Project-scoped infrastructure deployment policy below; same state/artifact access restrictions |
 
@@ -142,7 +142,7 @@ Example infrastructure-role trust condition:
 - The **permissions boundary** caps every role Terraform creates at the project's services and resources, so even a mistaken or malicious role definition cannot exceed it.
 - No backup-specific roles or grants in the current scope. No `secretsmanager:GetSecretValue`: Terraform creates empty secrets; values are set out of band ([Terraform conventions](../operations/deployment.md#terraform-conventions)).
 
-**Deployment trust:** A code deployer can replace a Lambda that legitimately reads mail/secrets, so it has indirect authority over that data even without direct read grants. Treat merged code, dependencies, workflows and release artifacts as trusted production inputs; protect workflow/bootstrap paths with owner review and verify artifact hashes against the release manifest. The IAM boundary limits account-wide escalation, not the application data authority inherent in deploying its code. From Phase 4, apply the same trust and digest verification to the webmail image, which handles the user's session tokens.
+**Deployment trust:** A code deployer can replace a Lambda that legitimately reads mail/secrets, so it has indirect authority over that data even without direct read grants. Treat code on `main`, dependencies, workflows and release artifacts as trusted production inputs; only the owner pushes to `main`, external changes to workflow/bootstrap paths need owner review before the owner lands them, and verify artifact hashes against the release manifest. The IAM boundary limits account-wide escalation, not the application data authority inherent in deploying its code. From Phase 4, apply the same trust and digest verification to the webmail image, which handles the user's session tokens.
 
 **Workflow side:** jobs that use AWS declare `permissions: id-token: write, contents: read` and call `aws-actions/configure-aws-credentials` (pinned to a commit SHA) with the role ARN. Role ARNs and the AWS region are stored as **GitHub repository variables**, not in workflow files, because account IDs must not appear in the public repository.
 

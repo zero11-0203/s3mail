@@ -64,7 +64,8 @@ Read the relevant owning document and its acceptance checks before making change
 - Keep `docs/diagrams/aws-mail-system.drawio.svg` current in the same change
   whenever AWS components, integrations, data flows, authorization boundaries,
   hosting or deployment stages change. Review it for related spec/IaC changes;
-  if it needs no update, state why in the pull request.
+  if it needs no update, state why in the commit message (or the pull request
+  for external contributions).
 - The SVG contains its editable draw.io source. Update that source, regenerate
   the SVG with embedded diagram data, and visually inspect the result. Do not
   maintain a separate overview diagram or edit only the rendered SVG paths.
@@ -75,6 +76,9 @@ Read the relevant owning document and its acceptance checks before making change
   rationale beyond the owning spec; do not create a parallel requirement list.
 
 ## Validation and reporting
+
+- Use trunk-based development: commit directly to `main` (no feature branches);
+  run the available local checks before pushing.
 
 - Follow the owning topic's acceptance checks and deployment validation tiers.
 - Use the actual repository toolchain once it exists; do not invent runnable

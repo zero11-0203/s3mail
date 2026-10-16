@@ -81,15 +81,15 @@ webmail/          Phase 4: upstream/adapter version locks, Lambda Dockerfile and
 
 There is **one deployed environment**, in one AWS account, serving as both production and the place where changes are verified after deploy. A personal project does not justify a second copy of DNS, Cognito and relay setup. Development happens locally against the test harness ([validation approach](deployment.md#validation-approach)), which runs every Go handler and the relay adapters against local fakes; nothing is deployed until it passes there.
 
-The pipeline combines pre-merge tests, a destructive-change plan check, gated infrastructure changes, automatic negative/infrastructure checks and an **owner-run positive acceptance check after each deployment**. Initially use aerc plus `mail-auth`/`mail-admin` and synthetic mail; browser checks join the checklist only after webmail is enabled in Phase 4. CI receives no personal-mail token and cannot read mailbox data. Mark a release verified only after the applicable owner checklist passes. This is a release test, not an additional deployment approval gate. Phase 0 validates the real infrastructure before primary-mail cutover; later changes reach production before this check, a deliberate single-environment tradeoff.
+The pipeline combines local pre-push checks, CI tests on every push to `main`, a destructive-change plan check, gated infrastructure changes, automatic negative/infrastructure checks and an **owner-run positive acceptance check after each deployment**. Initially use aerc plus `mail-auth`/`mail-admin` and synthetic mail; browser checks join the checklist only after webmail is enabled in Phase 4. CI receives no personal-mail token and cannot read mailbox data. Mark a release verified only after the applicable owner checklist passes. This is a release test, not an additional deployment approval gate. Phase 0 validates the real infrastructure before primary-mail cutover; later changes reach production before this check, a deliberate single-environment tradeoff.
 
 ### CI/CD
 
 ```mermaid
 flowchart LR
-    PR["Pull request"] --> CHECKS["Lint, unit, component and<br/>local system tests, scans"]
-    CHECKS --> PLAN["terraform plan<br/>sanitized summary in PR"]
-    MERGE["Merge to main"] --> BUILD["Build once, tagged by commit SHA<br/>Go zips → S3; Phase 4 image → ECR"]
+    LOCAL["Local checks<br/>before push"] --> PUSH["Push to main"]
+    PUSH --> CHECKS["Lint, unit, component and<br/>local system tests, scans"]
+    CHECKS --> BUILD["Build once, tagged by commit SHA<br/>Go zips → S3; Phase 4 image → ECR"]
     BUILD --> MPLAN["terraform plan → saved plan file<br/>+ destructive-change check"]
     MPLAN --> KIND{"Only code versions<br/>changed?"}
     KIND -->|yes| APPLY["Apply saved plan"]
@@ -98,13 +98,15 @@ flowchart LR
     SMOKE --> ACCEPT["Owner positive acceptance → verified release"]
 ```
 
-**Pull requests** (GitHub Actions, jobs filtered by changed paths) run the PR tiers of the testing strategy ([validation approach](deployment.md#validation-approach)):
+**Trunk-based development:** the owner commits directly to `main`, with no feature branches or owner pull requests. CI runs after a commit is already on `main`, so run the local check tiers before pushing. A failed check stops that commit before build and deployment; fix forward with a new commit or revert it. External contributions arrive as fork pull requests, get offline checks only and are landed on `main` by the owner after review.
+
+**Checks on every push to `main`** (GitHub Actions, jobs filtered by changed paths) run the CI tiers of the testing strategy ([validation approach](deployment.md#validation-approach)). They must pass before the build and deployment jobs start:
 
 - **Go:** `go vet`, `golangci-lint`, unit, fuzz-corpus, component and local system tests; build `provided.al2023` arm64 binaries.
-- **Terraform:** `terraform fmt -check`, `terraform validate`, `tflint`, `checkov`, `terraform test`, and an AWS-backed plan only for trusted same-repository PRs. Post a sanitized resource/action summary, never the raw plan or state. Saved binary/JSON plans are restricted deployment artifacts with seven-day expiry; their access is audited. Fork PRs run offline checks without credentials.
+- **Terraform:** `terraform fmt -check`, `terraform validate`, `tflint`, `checkov`, `terraform test`. The AWS-backed plan runs in the deployment pipeline below and publishes a sanitized resource/action summary in the job summary, never the raw plan or state. Saved binary/JSON plans are restricted deployment artifacts with seven-day expiry; their access is audited. Fork PRs run offline checks without credentials.
 - **Security:** `gitleaks` (essential in a public repository), `govulncheck`, and `trivy` filesystem scanning of dependencies. Add webmail image/dependency scans and browser integration jobs when its module is introduced in Phase 4.
 
-**Merge to `main`:**
+**Deployment from `main`** (after the checks pass). Deployment runs one at a time in commit order through a GitHub Actions `concurrency` group that never cancels an in-progress apply; a newer pending run supersedes older pending ones.
 
 1. **Build once.** Go Lambda zips are uploaded to a versioned S3 artifact bucket, keyed by commit SHA. Terraform receives these versions as variables. From Phase 4, the webmail build job also pushes a pinned image to ECR and records its digest, upstream commit and adapter version in the release manifest. Initial builds require no webmail image or ECR push.
 2. **Plan and check.** `terraform plan` writes a plan file. A script over `terraform show -json` fails the run if any stateful resource would be deleted or replaced: the hosted zone and the MX record, message and index buckets, DynamoDB tables, Cognito user pool, SES identity and receipt rules. This complements `prevent_destroy`, which does not catch moves or renames. Reject disabling original-bucket versioning, enabling force-empty/expiration, or adding original-object/version deletion grants as well.
@@ -114,7 +116,7 @@ flowchart LR
 6. **Deliverability check,** only when the plan changed DNS records or relay resources: send through the active relay to an external checker and confirm DKIM, SPF and DMARC pass ([validation approach](deployment.md#validation-approach)).
 7. **Positive acceptance:** initially the owner logs in through `mail-auth`, uses aerc and runs local `mail-admin acceptance` with the owner's OAuth token. Receive a uniquely marked synthetic mail, confirm get/query/changes and alias routing, upload/download an attachment, move/mark/search it after indexing, send and verify Sent/submission state, then delete the fixture from the active mailbox while retaining its original S3 object. Verify token refresh; use the protocol harness for push/reconnect features the CLI does not expose, and two independent CLI sessions for shared state. Once webmail is enabled, add its browser-specific gate ([clients](../specs/clients.md#design)) and CLI/browser shared-state checks. The helper returns a content-free release result; no owner token or mailbox response reaches CI. A failed applicable check leaves the release unverified and triggers rollback/repair. Missing deferred browser checks do not block a core release.
 
-**No scheduled synthetic tests:** keep the original preference for PR/deployment-triggered checks. Between deployments, real-traffic alarms cannot distinguish a quiet mailbox from an upstream outage that emits no events; this policy leaves a documented detection gap. One-minute work-recovery sweeps and garbage collection are scheduled operational jobs, not synthetic tests. Monitor their completion/age so a stopped maintenance path is visible.
+**No scheduled synthetic tests:** keep the original preference for push/deployment-triggered checks. Between deployments, real-traffic alarms cannot distinguish a quiet mailbox from an upstream outage that emits no events; this policy leaves a documented detection gap. One-minute work-recovery sweeps and garbage collection are scheduled operational jobs, not synthetic tests. Monitor their completion/age so a stopped maintenance path is visible.
 
 **Rollback:** publish every Lambda version behind `live`; retain the prior release manifest and revert the related aliases as one release, with triggers/integrations pinned to those aliases. CI records the manifest used, and the next Terraform plan reconciles emergency alias drift. Retain immutable artifacts and, after Phase 4, prior webmail images/digests referenced by retained releases. Alias rollback does not reverse DNS, IAM, receipt rules, relay settings or data changes: inspect the saved plan and use their documented repair steps. Schema/data-format changes ship in compatible stages (read both formats, migrate, then remove old support in a later release), with rehearsed synthetic backfills. Incompatible data restoration uses [recovery](recovery.md#design) and outbound pause, never a blind replay of send attempts.
 
@@ -123,13 +125,13 @@ flowchart LR
 - GitHub OIDC with no stored AWS keys: separate plan, code-deploy and gated infrastructure-deploy roles (see [CI identity](../specs/security.md#ci-identity)).
 - Pull requests from forks get no AWS access: use the `pull_request` trigger, never `pull_request_target`.
 - Pin third-party actions to commit SHAs; Renovate (or Dependabot) updates actions, Go modules and Terraform providers.
-- Branch protection on `main`: required checks, no direct pushes.
+- Protect `main` with a repository ruleset: only the owner may push, and force pushes and branch deletion are blocked. Do not require status checks on `main`, because that rule blocks direct pushes; local pre-push checks and the pipeline's check jobs, which run before build and deploy, take that role.
 - Changes to `infra/bootstrap/` are applied by hand by the owner, never by CI.
 
 **Other workflows:**
 
 - **CLI releases:** `goreleaser` on version tags publishes `mail-auth` binaries for macOS and Linux to GitHub Releases.
-- **Drift:** there is no scheduled drift check. Every AWS-authorized PR plan and deployment plan shows drift from manual changes; fork PRs run offline checks. Deployment plans are applied only after the destructive-change check.
+- **Drift:** there is no scheduled drift check. Every deployment plan shows drift from manual changes; fork PRs run offline checks. Deployment plans are applied only after the destructive-change check.
 
 A later AI agent project would add its own build, test and evaluation jobs to this pipeline.
 
@@ -167,10 +169,10 @@ Tests are organized around JMAP consistency, MIME handling, authorization and th
 
 | Tier | Where / when | Scope |
 | --- | --- | --- |
-| Unit and fuzz | Every PR, seconds | Parsers, algorithms, error classification |
-| Component | Every PR, ~1 minute | One Lambda handler against DynamoDB Local and an S3-compatible store (`testcontainers-go`) |
-| Local system | Every PR, minutes | All Go handlers wired together in one local HTTP harness: ingest → JMAP → push → submit → bounce, with recorded SES inbound events, the `fake` relay adapter and a local SMTP sink (e.g. Mailpit) |
-| Interoperability | Every PR (available replays); owner checklist per release | aerc first; browser fixtures and checks added in Phase 4 |
+| Unit and fuzz | Locally before push and every CI run, seconds | Parsers, algorithms, error classification |
+| Component | Locally before push and every CI run, ~1 minute | One Lambda handler against DynamoDB Local and an S3-compatible store (`testcontainers-go`) |
+| Local system | Locally before push and every CI run, minutes | All Go handlers wired together in one local HTTP harness: ingest → JMAP → push → submit → bounce, with recorded SES inbound events, the `fake` relay adapter and a local SMTP sink (e.g. Mailpit) |
+| Interoperability | Every CI run (available replays); owner checklist per release | aerc first; browser fixtures and checks added in Phase 4 |
 | Post-deploy CI | Deployed environment, every deployment | Infrastructure/negative-auth checks, nonce-bound transport canary and conditional deliverability checks |
 | Positive acceptance | Owner-run after every deployment; CLI slice in Phase 0 | aerc + protocol helper: auth/refresh, persistent synthetic mail, get/query/changes, blobs, search, submission and safe cleanup; add browser acceptance only when deployed |
 | Recovery/scale | Before primary cutover and after relevant storage changes | Isolated synthetic rebuilds with/without metadata, deletion/GC races, 50,000-message search benchmark and index-version accounting |

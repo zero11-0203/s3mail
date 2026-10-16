@@ -24,6 +24,6 @@ Keep the diagram's date current when its design changes. Keep the architecture p
 2. Change the diagram using the owning specs as the authority. Keep AWS service icons, readable labels and clear arrow directions. Dashed connectors denote deferred Phase 4 paths.
 3. Export SVG with **Include a copy of my diagram** enabled and replace this same file. For scripted editing, the SVG root's `content` attribute contains the embedded `mxfile` XML; edit a temporary `.drawio` copy and export it with `--embed-diagram` (`-e`). Do not edit only the rendered SVG paths.
 4. Reopen the resulting SVG in draw.io to confirm editability, and render a preview to inspect clipping, overlapping connectors, text and the Phase 4 boundary. Check the image link in `docs/architecture.md`.
-5. Complete the documentation/diagram section of the pull-request checklist. Review changes to both the embedded model and the visible image; an updated date alone does not establish correctness.
+5. State the diagram impact in the commit message (external contributions complete the pull-request checklist). Review changes to both the embedded model and the visible image; an updated date alone does not establish correctness.
 
 The diagram is maintained with repository changes, not synchronized automatically from a live AWS account. The repository currently has no deployed infrastructure to discover.
