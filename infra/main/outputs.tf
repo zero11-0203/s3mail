@@ -10,5 +10,6 @@ output "auth" {
     terminal_client_id = module.auth.terminal_client_id
     login_base_url     = module.auth.login_base_url
     scopes             = module.auth.scopes
+    callback_url       = var.terminal_callback_urls[0]
   }
 }
