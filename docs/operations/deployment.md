@@ -137,7 +137,7 @@ A later AI agent project would add its own build, test and evaluation jobs to th
 
 ### Steps outside normal Terraform provisioning
 
-- Apply the `bootstrap` configuration with an IAM Identity Center admin session, migrate its state into the new bucket, and set the role ARNs and region as GitHub repository variables; create the `production` and `production-gated` GitHub environments.
+- Apply the `bootstrap` configuration with a [short-lived owner admin session](../specs/security.md#ci-identity), migrate its state into the new bucket, and set the role ARNs and region as GitHub repository variables; create the `production` and `production-gated` GitHub environments.
 - Delegate the domain's nameservers at the registrar to the Route 53 hosted zone, once, after the zone is populated and verified.
 - Sign up for SMTP2GO, add and verify the sender domain, configure the bounce/complaint webhook, and store the SMTP credentials and webhook secret in Secrets Manager.
 - Create and enroll the personal Cognito user in MFA.

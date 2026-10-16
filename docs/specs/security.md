@@ -97,7 +97,7 @@ The permission inventory must implement these component boundaries; a service li
 
 GitHub Actions authenticates to AWS with **OpenID Connect**: each job exchanges a short-lived GitHub-issued token for temporary AWS credentials. No AWS access keys exist in GitHub. The OIDC provider, all CI roles and their policies/boundary are created by `bootstrap`; main deployment roles cannot change them.
 
-**Bootstrap** (applied by hand, once, with the owner's short-lived IAM Identity Center admin session, never long-lived access keys):
+**Bootstrap** (applied by hand, once, with a short-lived owner admin session, such as IAM Identity Center (`aws sso login`) or console-credential sign-in (`aws login`); never long-lived access keys):
 
 1. IAM OIDC identity provider for `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
 2. Terraform state bucket (versioned, encrypted, public access blocked) and the artifact bucket.

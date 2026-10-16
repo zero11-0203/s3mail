@@ -1,7 +1,8 @@
-# Applied by hand with a short-lived IAM Identity Center admin session.
-# See docs/specs/security.md#ci-identity. The CI roles and permissions
-# boundary are added in a later change, together with the permission
-# inventory they must implement.
+# Applied by hand with a short-lived owner admin session (IAM Identity Center
+# or aws login), never long-lived access keys; see
+# docs/specs/security.md#ci-identity. The CI roles and permissions boundary
+# are added in a later change, together with the permission inventory they
+# must implement.
 
 data "aws_caller_identity" "current" {}
 
