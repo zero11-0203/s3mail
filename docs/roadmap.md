@@ -30,7 +30,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 - Select and record the AWS region and pinned Go runtime/provider/aerc/library versions. Deploy the Regional REST API streaming proof and common authorization contract. Webmail image/adapter selection and hosting are deferred to Phase 4.
 - Provision the pilot SES identity/MX, receipt SNS/SQS path, Cognito user/scopes and basic durable mail/submission records. Verify envelope recipients, unknown-recipient behavior, relay TLS/Message-ID/authentication and webhook correlation.
 - Build the minimal `mail-auth` flow and connect aerc: login/refresh, session discovery, one message, a blob and one submission including response-loss behavior. Use the protocol helper for operations not exposed directly by the CLI. No webmail deployment is required for this slice.
-- Check actual binary upload and streaming response limits. Replace an incompatible client/adapter before expanding the backend; do not weaken the shared protocol/security contract to disguise a failed gate.
+- Check actual binary upload and streaming response limits ([streaming spike evidence](evidence/phase0-streaming-spike.md); authorizer and JWT-size checks remain). Replace an incompatible client/adapter before expanding the backend; do not weaken the shared protocol/security contract to disguise a failed gate.
 
 ### Phase 1 — Durable mail transport and storage
 

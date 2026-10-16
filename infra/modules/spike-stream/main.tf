@@ -117,6 +117,10 @@ resource "aws_api_gateway_integration" "route" {
   integration_http_method = "POST"
   uri                     = local.streaming_uri
   response_transfer_mode  = "STREAM"
+
+  # The 29 s default still caps total response time in STREAM mode
+  # (measured: streams cut at ~30 s); raise it to the 15-minute maximum.
+  timeout_milliseconds = 900000
 }
 
 resource "aws_lambda_permission" "apigateway" {

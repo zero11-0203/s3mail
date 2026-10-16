@@ -21,6 +21,12 @@ Each spec owns its requirements, failure behavior and acceptance checks. Read th
 | SQLite indexing, multilingual matching, retention and cost | [Search](specs/search.md) |
 | aerc, OAuth helpers, deferred webmail and display safety | [Clients](specs/clients.md) |
 
+## Evidence
+
+Measured Phase 0 results; requirements stay in the owning specs.
+
+- [REST API response streaming spike](evidence/phase0-streaming-spike.md)
+
 ## Operations
 
 | Task | Document |

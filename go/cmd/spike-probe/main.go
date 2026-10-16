@@ -44,6 +44,9 @@ func main() {
 	rawURL := flag.String("url", "", "stage invoke URL (terraform output spike_stream_invoke_url)")
 	long := flag.Bool("long", false, "run the long stream test: 13 events 30s apart (6 minutes)")
 	downloadMiB := flag.Int("download-mib", 25, "download test size in MiB")
+	only := flag.String("only", "", "run one test: stream, download or upload")
+	streamCount := flag.Int("count", 0, "stream test event count (overrides -long)")
+	streamInterval := flag.Duration("interval", 10*time.Second, "stream test interval, with -count")
 	flag.Parse()
 	if *rawURL == "" {
 		fmt.Fprintln(os.Stderr, "-url is required")
@@ -71,13 +74,22 @@ func main() {
 		signer: v4.NewSigner(), client: &http.Client{Timeout: 16 * time.Minute},
 	}
 
-	if *long {
-		p.stream(ctx, 13, 30*time.Second)
-	} else {
-		p.stream(ctx, 4, 10*time.Second)
+	if *only == "" || *only == "stream" {
+		switch {
+		case *streamCount > 0:
+			p.stream(ctx, *streamCount, *streamInterval)
+		case *long:
+			p.stream(ctx, 13, 30*time.Second)
+		default:
+			p.stream(ctx, 4, 10*time.Second)
+		}
 	}
-	p.download(ctx, *downloadMiB*1024*1024)
-	p.uploads(ctx)
+	if *only == "" || *only == "download" {
+		p.download(ctx, *downloadMiB*1024*1024)
+	}
+	if *only == "" || *only == "upload" {
+		p.uploads(ctx)
+	}
 
 	if p.failed {
 		fmt.Println("\nRESULT: FAIL")
@@ -179,7 +191,8 @@ func (p *probe) stream(ctx context.Context, count int, interval time.Duration) {
 	}
 	// Incremental delivery: the first event must arrive well before the
 	// last one is even sent. Lag includes laptop/Lambda clock skew.
-	incremental := recv[0].Before(sent[count-1].Add(-interval / 2))
+	// A single event cannot show incremental delivery, so it is not judged.
+	incremental := count < 2 || recv[0].Before(sent[count-1].Add(-interval/2))
 	ok := incremental && maxLag < 3*time.Second
 	p.report(ok, name, "first byte %s, max event lag %s, total %s, incremental=%v",
 		opened.Round(time.Millisecond), maxLag.Round(time.Millisecond), total.Round(time.Second), incremental)
@@ -204,7 +217,7 @@ func (p *probe) download(ctx context.Context, n int) {
 	size, err := io.Copy(got, resp.Body)
 	elapsed := time.Since(start)
 	if err != nil {
-		p.report(false, name, "after %d bytes: %v", size, err)
+		p.report(false, name, "after %d bytes, %s: %v", size, elapsed.Round(time.Millisecond), err)
 		return
 	}
 	want := sha256.New()
