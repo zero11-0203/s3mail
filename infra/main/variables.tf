@@ -8,3 +8,15 @@ variable "project" {
   type        = string
   default     = "s3mail"
 }
+
+variable "spike_stream_enabled" {
+  description = "Deploy the Phase 0 response-streaming spike."
+  type        = bool
+  default     = false
+}
+
+variable "spike_stream_zip" {
+  description = "Path to the spike Lambda zip built by make spike-build."
+  type        = string
+  default     = "../../go/build/spike-stream/bootstrap.zip"
+}
