@@ -11,7 +11,7 @@ s3mail lets one owner receive and send mail for a custom domain without running 
 - **Serve:** Go Lambdas behind API Gateway implement JMAP Core, Mail and Submission, including push and blob streaming.
 - **Send:** a pluggable SMTP relay (SMTP2GO first) delivers outbound mail, with quotas and bounce handling. SES is used for receiving only.
 - **Search:** SQLite FTS5 index snapshots in S3, rebuildable from the source data.
-- **Sign in:** Cognito OAuth with MFA.
+- **Sign in:** Cognito OAuth (password sign-in; MFA disabled by owner decision).
 - **Tested Clients:** [aerc](https://aerc-mail.org/) and small CLI helpers first; browser webmail comes later.
 
 ![AWS architecture of s3mail](docs/diagrams/aws-mail-system.drawio.svg)

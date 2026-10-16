@@ -140,7 +140,7 @@ A later AI agent project would add its own build, test and evaluation jobs to th
 - Apply the `bootstrap` configuration with a [short-lived owner admin session](../specs/security.md#ci-identity), migrate its state into the new bucket, and set the role ARNs and region as GitHub repository variables; create the `production` and `production-gated` GitHub environments.
 - Delegate the domain's nameservers at the registrar to the Route 53 hosted zone, once, after the zone is populated and verified.
 - Sign up for SMTP2GO, add and verify the sender domain, configure the bounce/complaint webhook, and store the SMTP credentials and webhook secret in Secrets Manager.
-- Create and enroll the personal Cognito user in MFA.
+- Create the personal Cognito user with a temporary password (no invitation message) and set the real password at first login.
 - Enroll independent recovery methods and run Phase 0 client/transport checks using aerc. In Phase 4, set any webmail session secret out of band in Secrets Manager and validate its browser login configuration; no VM management key is required.
 - Rehearse [recovery](recovery.md#failure-handling) and the owner positive acceptance checklist before directing primary mail here.
 

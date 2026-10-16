@@ -1,5 +1,5 @@
 # One Cognito user pool and one user (docs/specs/security.md#authentication-and-authorization):
-# admin-created only, TOTP MFA required, OAuth bearer tokens as the only API
+# admin-created only, password sign-in without MFA (owner decision), OAuth bearer tokens as the only API
 # credential. App clients are public (no secret) and use code + PKCE.
 
 data "aws_region" "current" {}
@@ -8,7 +8,7 @@ resource "aws_cognito_user_pool" "this" {
   name                = var.name
   user_pool_tier      = "ESSENTIALS"
   deletion_protection = "ACTIVE"
-  mfa_configuration   = "ON"
+  mfa_configuration   = "OFF"
 
   # Plain usernames: no email or phone attribute is stored, so no real
   # address lives in the pool. Recovery is by the owner's AWS admin access,
@@ -24,12 +24,9 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
-  software_token_mfa_configuration {
-    enabled = true
-  }
-
-  # NIST SP 800-63B: at least 8 characters when MFA is also required, and
-  # no composition rules (they push users toward predictable patterns).
+  # 8 characters and no composition rules, as chosen by the owner. NIST SP
+  # 800-63B asks for 15 when a password is the only factor; see the accepted
+  # risk in docs/specs/security.md#authentication-and-authorization.
   password_policy {
     minimum_length                   = 8
     require_lowercase                = false

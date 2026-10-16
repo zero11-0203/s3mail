@@ -20,7 +20,7 @@
 
 ### Authentication and authorization
 
-Use **one Cognito User Pool and one user**, with self-service registration disabled and MFA enabled. **OAuth 2.0 bearer tokens are the only accepted credential** for the JMAP API; there is no Basic authentication and no app passwords. Every client maps to the same JMAP account.
+Use **one Cognito User Pool and one user**, with self-service registration disabled. **MFA is disabled by owner decision:** sign-in is a single password with an 8-character minimum and no composition rules. This is an accepted risk: it is below NIST SP 800-63B's 15-character guidance for single-factor passwords, the pool tier has no breached-password check, and a phished or reused password grants full mailbox and send access until the session is revoked. Use a unique, randomly generated password; reconsider MFA or passkeys before primary-mail cutover. **OAuth 2.0 bearer tokens are the only accepted credential** for the JMAP API; there is no Basic authentication and no app passwords. Every client maps to the same JMAP account.
 
 ### Client registration and discovery
 
@@ -45,7 +45,7 @@ This flow is introduced with webmail in Phase 4 and is not required for initial 
 3. `mail-auth token` supplies a valid access token to any client that can run a token command (such as aerc) without embedding secrets in configuration files.
 4. Verify session expiry and refresh behavior with aerc from Phase 0. The helper may open the Cognito login page in the system browser; this does not require a hosted webmail client.
 
-Use five-minute access tokens and refresh-token rotation where supported by the pinned clients. Keep MFA recovery codes and the AWS/registrar/relay recovery methods outside this mailbox. Browser refresh credentials follow the selected client's session design ([clients](clients.md#design)) and must never enter URLs or telemetry.
+Use five-minute access tokens and refresh-token rotation where supported by the pinned clients. Keep the Cognito password and the AWS/registrar/relay recovery methods outside this mailbox; Cognito account recovery is admin-only through the owner's AWS access. Browser refresh credentials follow the selected client's session design ([clients](clients.md#design)) and must never enter URLs or telemetry.
 
 ### Shared endpoint authorization
 

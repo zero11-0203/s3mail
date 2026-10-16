@@ -14,7 +14,7 @@ This page explains the system. The [topic specifications](README.md#topic-specif
 
 ## Scope
 
-The initial system receives and sends custom-domain mail, supports multiple aliases with shared message state, and implements the required JMAP Core, Mail and Submission behavior. Existing OAuth-capable clients provide the UI. MFA, account-scoped authorization, modest operational overhead and repeatable infrastructure are core goals.
+The initial system receives and sends custom-domain mail, supports multiple aliases with shared message state, and implements the required JMAP Core, Mail and Submission behavior. Existing OAuth-capable clients provide the UI. Account-scoped authorization, modest operational overhead and repeatable infrastructure are core goals.
 
 Initial non-goals are multi-user hosting, a custom client or aerc fork, IMAP/SMTP submission compatibility, password/Basic/app-password authentication on mail endpoints, CalDAV/CardDAV and AI features. An IMAP gateway is a possible later extension.
 
