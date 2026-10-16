@@ -7,7 +7,11 @@ module "spike_stream" {
   source = "../modules/spike-stream"
   count  = var.spike_stream_enabled ? 1 : 0
 
-  lambda_zip = var.spike_stream_zip
+  lambda_zip     = var.spike_stream_zip
+  authorizer_zip = var.spike_authorizer_zip
+  issuer         = module.auth.issuer
+  client_ids     = [module.auth.terminal_client_id]
+  scopes         = module.auth.scopes
 }
 
 module "auth" {

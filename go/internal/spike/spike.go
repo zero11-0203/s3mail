@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,9 @@ const (
 // Handle routes one API Gateway proxy request. Every route returns a
 // streaming response, because every integration uses STREAM mode.
 func Handle(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
+	// The probe tags requests so CloudWatch Logs show which ones reached
+	// this function; requests the authorizer rejects must never appear.
+	log.Printf("spike: %s %s probe=%q", req.HTTPMethod, req.Resource, req.QueryStringParameters["probe"])
 	switch {
 	case req.HTTPMethod == http.MethodGet && req.Resource == "/stream":
 		return stream(ctx, req.QueryStringParameters)
@@ -130,6 +134,9 @@ type UploadResult struct {
 	Base64   bool   `json:"base64"`
 	Error    string `json:"error,omitempty"`
 	MaxBytes int    `json:"maxBytes"`
+	// Authorized reports that the authorizer's context (sub, clientId,
+	// scope) reached the integration.
+	Authorized bool `json:"authorized"`
 }
 
 // upload measures the request body API Gateway delivered and enforces
@@ -143,7 +150,8 @@ func upload(req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreaming
 		}
 		body = decoded
 	}
-	res := UploadResult{Size: len(body), Base64: req.IsBase64Encoded, MaxBytes: MaxUpload}
+	res := UploadResult{Size: len(body), Base64: req.IsBase64Encoded, MaxBytes: MaxUpload,
+		Authorized: req.RequestContext.Authorizer["sub"] != nil && req.RequestContext.Authorizer["scope"] != nil}
 	if len(body) > MaxUpload {
 		res.Error = "tooLarge"
 		return jsonResponse(http.StatusRequestEntityTooLarge, res), nil

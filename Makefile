@@ -37,14 +37,18 @@ tf-check:
 secrets:
 	gitleaks git --redact --no-banner .
 
-# Phase 0 streaming spike Lambda: linux/arm64 bootstrap binary, zipped with a
-# fixed timestamp so unchanged code gives an unchanged zip hash.
-SPIKE_BUILD := go/build/spike-stream
+# Phase 0 streaming spike Lambdas (spike function and bearer-token
+# authorizer): linux/arm64 bootstrap binaries, zipped with a fixed timestamp
+# so unchanged code gives an unchanged zip hash.
+SPIKE_LAMBDAS := spike-stream authorizer
 
 spike-build:
-	mkdir -p $(SPIKE_BUILD)
-	cd go && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath \
-		-ldflags "-s -w -X github.com/zero11-0203/s3mail/go/internal/buildinfo.Version=$$(git rev-parse --short HEAD)" \
-		-o build/spike-stream/bootstrap ./cmd/spike-stream
-	touch -t 202601010000 $(SPIKE_BUILD)/bootstrap
-	cd $(SPIKE_BUILD) && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap
+	@set -e; for f in $(SPIKE_LAMBDAS); do \
+		echo "build $$f"; \
+		mkdir -p go/build/$$f; \
+		(cd go && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath \
+			-ldflags "-s -w -X github.com/zero11-0203/s3mail/go/internal/buildinfo.Version=$$(git rev-parse --short HEAD)" \
+			-o build/$$f/bootstrap ./cmd/$$f); \
+		touch -t 202601010000 go/build/$$f/bootstrap; \
+		(cd go/build/$$f && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap); \
+	done

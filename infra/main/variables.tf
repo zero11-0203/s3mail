@@ -21,6 +21,12 @@ variable "spike_stream_zip" {
   default     = "../../go/build/spike-stream/bootstrap.zip"
 }
 
+variable "spike_authorizer_zip" {
+  description = "Path to the authorizer Lambda zip built by make spike-build."
+  type        = string
+  default     = "../../go/build/authorizer/bootstrap.zip"
+}
+
 variable "auth_domain_prefix" {
   description = "Globally unique Cognito managed login domain prefix (set in terraform.tfvars)."
   type        = string

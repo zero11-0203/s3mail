@@ -1,50 +1,52 @@
 // Command spike-probe measures the deployed streaming spike API and prints
-// a pass/fail report. Requests are SigV4-signed with the caller's AWS
-// credentials, because the spike methods use AWS_IAM authorization.
+// a pass/fail report. Requests carry a Cognito access token from -token-cmd
+// (default "mail-auth token"), because the spike methods use the s3mail
+// Lambda authorizer.
 //
 //	spike-probe -url https://<api-id>.execute-api.<region>.amazonaws.com/spike [-long]
+//
+// Every request is tagged with ?probe=<run>-<label>; the auth test prints
+// the tags of rejected requests so CloudWatch Logs can confirm that none of
+// them reached the spike function.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/config"
-
 	"github.com/zero11-0203/s3mail/go/internal/spike"
 )
 
-const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
 type probe struct {
-	base   string
-	region string
-	creds  aws.CredentialsProvider
-	signer *v4.Signer
-	client *http.Client
-	failed bool
+	base     string
+	tokenCmd []string
+	run      string
+	client   *http.Client
+	failed   bool
 }
 
 func main() {
 	rawURL := flag.String("url", "", "stage invoke URL (terraform output spike_stream_invoke_url)")
 	long := flag.Bool("long", false, "run the long stream test: 13 events 30s apart (6 minutes)")
 	downloadMiB := flag.Int("download-mib", 25, "download test size in MiB")
-	only := flag.String("only", "", "run one test: stream, download or upload")
+	only := flag.String("only", "", "run one test: auth, stream, download or upload")
+	tokenCmd := flag.String("token-cmd", "mail-auth token", "command that prints a valid access token")
 	streamCount := flag.Int("count", 0, "stream test event count (overrides -long)")
 	streamInterval := flag.Duration("interval", 10*time.Second, "stream test interval, with -count")
 	flag.Parse()
@@ -57,21 +59,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "bad -url:", err)
 		os.Exit(2)
 	}
-	m := regexp.MustCompile(`\.execute-api\.([a-z0-9-]+)\.amazonaws\.com$`).FindStringSubmatch(u.Host)
-	if m == nil {
+	if !regexp.MustCompile(`\.execute-api\.[a-z0-9-]+\.amazonaws\.com$`).MatchString(u.Host) {
 		fmt.Fprintln(os.Stderr, "-url is not an execute-api URL")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*tokenCmd) == "" {
+		fmt.Fprintln(os.Stderr, "-token-cmd is required")
 		os.Exit(2)
 	}
 
 	ctx := context.Background()
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(m[1]))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "load AWS config:", err)
-		os.Exit(1)
-	}
 	p := &probe{
-		base: u.String(), region: m[1], creds: cfg.Credentials,
-		signer: v4.NewSigner(), client: &http.Client{Timeout: 16 * time.Minute},
+		base: u.String(), tokenCmd: strings.Fields(*tokenCmd), run: rand.Text()[:8],
+		client: &http.Client{Timeout: 16 * time.Minute},
+	}
+	p.info("run", "probe tag prefix %s", p.run)
+
+	if *only == "" || *only == "auth" {
+		p.auth(ctx)
 	}
 
 	if *only == "" || *only == "stream" {
@@ -111,36 +116,156 @@ func (p *probe) info(name, format string, args ...any) {
 	fmt.Printf("%-4s %-28s %s\n", "INFO", name, fmt.Sprintf(format, args...))
 }
 
-func (p *probe) do(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
+// token runs -token-cmd for each request, so long runs pick up refreshed
+// tokens. The token is never printed.
+func (p *probe) token(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, p.tokenCmd[0], p.tokenCmd[1:]...).Output()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", strings.Join(p.tokenCmd, " "), err)
+	}
+	t := strings.TrimSpace(string(out))
+	if strings.Count(t, ".") != 2 {
+		return "", errors.New("token command did not print a JWT")
+	}
+	return t, nil
+}
+
+// tag names a request in the spike function's logs.
+func (p *probe) tag(label string) string { return p.run + "-" + label }
+
+// do sends a request tagged with label and authorized with a valid token.
+func (p *probe) do(ctx context.Context, method, path, label string, body []byte, contentType string) (*http.Response, error) {
+	t, err := p.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return p.send(ctx, method, path, label, "Bearer "+t, body, contentType)
+}
+
+// send sends a request with an explicit Authorization value ("" = none).
+func (p *probe) send(ctx context.Context, method, path, label, authorization string, body []byte, contentType string) (*http.Response, error) {
 	var r io.Reader
-	hash := emptySHA256
 	if body != nil {
 		r = bytes.NewReader(body)
-		sum := sha256.Sum256(body)
-		hash = hex.EncodeToString(sum[:])
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.base+path, r)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	req, err := http.NewRequestWithContext(ctx, method, p.base+path+sep+"probe="+p.tag(label), r)
 	if err != nil {
 		return nil, err
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	creds, err := p.creds.Retrieve(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("AWS credentials: %w", err)
-	}
-	if err := p.signer.SignHTTP(ctx, creds, req, hash, "execute-api", p.region, time.Now()); err != nil {
-		return nil, err
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
 	}
 	return p.client.Do(req)
+}
+
+// auth checks the shared bearer-token contract at the gateway: requests
+// without a valid access token get 401 with a Bearer challenge, and a valid
+// token's authorizer context reaches the integration.
+func (p *probe) auth(ctx context.Context) {
+	valid, err := p.token(ctx)
+	if err != nil {
+		p.report(false, "auth token", "%v", err)
+		return
+	}
+	// Flip one character of the signature: well-formed, wrongly signed.
+	sig := valid[strings.LastIndex(valid, ".")+1:]
+	flipped := "A"
+	if sig[0] == 'A' {
+		flipped = "B"
+	}
+	tampered := valid[:strings.LastIndex(valid, ".")+1] + flipped + sig[1:]
+	header, payload, _ := strings.Cut(valid, ".")
+	payload, _, _ = strings.Cut(payload, ".")
+	unsigned := header + "." + payload + "."
+
+	var rejected []string
+	for _, c := range []struct{ label, authorization string }{
+		{"none", ""},
+		{"empty-bearer", "Bearer "},
+		{"basic", "Basic b3duZXI6cGFzc3dvcmQ="},
+		{"garbage", "Bearer not-a-jwt"},
+		{"unsigned", "Bearer " + unsigned},
+		{"tampered", "Bearer " + tampered},
+		{"no-scheme", valid},
+	} {
+		name := "reject " + c.label
+		resp, err := p.send(ctx, http.MethodGet, "/stream?count=1&interval=0", c.label, c.authorization, nil, "")
+		if err != nil {
+			p.report(false, name, "request: %v", err)
+			continue
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+		challenge := resp.Header.Get("WWW-Authenticate")
+		ok := resp.StatusCode == http.StatusUnauthorized && strings.HasPrefix(challenge, "Bearer ") &&
+			strings.Contains(challenge, "resource_metadata=")
+		p.report(ok, name, "status %d, WWW-Authenticate=%q, body %.80s", resp.StatusCode, challenge, bytes.TrimSpace(b))
+		rejected = append(rejected, p.tag(c.label))
+	}
+	p.info("rejected tags", "%s (none may appear in the spike function's logs)", strings.Join(rejected, " "))
+
+	resp, err := p.do(ctx, http.MethodPost, "/upload", "valid", []byte("hello"), "application/octet-stream")
+	if err != nil {
+		p.report(false, "accept valid token", "request: %v", err)
+		return
+	}
+	var res spike.UploadResult
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	_ = resp.Body.Close()
+	p.report(resp.StatusCode == http.StatusOK && res.Authorized, "accept valid token",
+		"status %d, authorizer context reached the integration=%v (tag %s must appear)", resp.StatusCode, res.Authorized, p.tag("valid"))
+
+	p.metadata(ctx)
+}
+
+// metadata fetches the RFC 9728 document named by the 401 challenge.
+func (p *probe) metadata(ctx context.Context) {
+	resp, err := p.send(ctx, http.MethodGet, "/stream", "challenge", "", nil, "")
+	if err != nil {
+		p.report(false, "resource metadata", "request: %v", err)
+		return
+	}
+	_ = resp.Body.Close()
+	m := regexp.MustCompile(`resource_metadata="([^"]+)"`).FindStringSubmatch(resp.Header.Get("WWW-Authenticate"))
+	if m == nil {
+		p.report(false, "resource metadata", "no resource_metadata in challenge")
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m[1], nil)
+	if err != nil {
+		p.report(false, "resource metadata", "%v", err)
+		return
+	}
+	resp, err = p.client.Do(req)
+	if err != nil {
+		p.report(false, "resource metadata", "request: %v", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var doc struct {
+		Resource             string   `json:"resource"`
+		AuthorizationServers []string `json:"authorization_servers"`
+		ScopesSupported      []string `json:"scopes_supported"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&doc)
+	ok := err == nil && resp.StatusCode == http.StatusOK && doc.Resource == p.base &&
+		len(doc.AuthorizationServers) == 1 && strings.HasPrefix(doc.AuthorizationServers[0], "https://cognito-idp.")
+	p.report(ok, "resource metadata", "status %d, Content-Type=%q, resource=%q, authorization_servers=%v, scopes=%v",
+		resp.StatusCode, resp.Header.Get("Content-Type"), doc.Resource, doc.AuthorizationServers, doc.ScopesSupported)
 }
 
 // stream checks that events arrive as they are sent, not at the end.
 func (p *probe) stream(ctx context.Context, count int, interval time.Duration) {
 	name := fmt.Sprintf("stream %dx%s", count, interval)
 	start := time.Now()
-	resp, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/stream?count=%d&interval=%d", count, int(interval.Seconds())), nil, "")
+	resp, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/stream?count=%d&interval=%d", count, int(interval.Seconds())), "stream", nil, "")
 	if err != nil {
 		p.report(false, name, "request: %v", err)
 		return
@@ -202,7 +327,7 @@ func (p *probe) stream(ctx context.Context, count int, interval time.Duration) {
 func (p *probe) download(ctx context.Context, n int) {
 	name := fmt.Sprintf("download %d MiB", n/1024/1024)
 	start := time.Now()
-	resp, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/download?bytes=%d&seed=probe", n), nil, "")
+	resp, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/download?bytes=%d&seed=probe", n), "download", nil, "")
 	if err != nil {
 		p.report(false, name, "request: %v", err)
 		return
@@ -252,7 +377,7 @@ func (p *probe) uploads(ctx context.Context) {
 	for _, c := range cases {
 		name := fmt.Sprintf("upload %d bytes", c.size)
 		body, _ := io.ReadAll(io.LimitReader(spike.Pattern(fmt.Sprint("up", c.size)), int64(c.size)))
-		resp, err := p.do(ctx, http.MethodPost, "/upload", body, "application/octet-stream")
+		resp, err := p.do(ctx, http.MethodPost, "/upload", fmt.Sprint("upload", c.size), body, "application/octet-stream")
 		if err != nil {
 			p.report(false, name, "request: %v", err)
 			continue
@@ -272,8 +397,8 @@ func (p *probe) uploads(ctx context.Context) {
 		ok := resp.StatusCode == c.expect
 		if c.expect == http.StatusOK {
 			sum := sha256.Sum256(body)
-			ok = ok && res.Size == c.size && res.SHA256 == hex.EncodeToString(sum[:])
-			summary += fmt.Sprintf(", sha256 match=%v", res.SHA256 == hex.EncodeToString(sum[:]))
+			ok = ok && res.Size == c.size && res.SHA256 == hex.EncodeToString(sum[:]) && res.Authorized
+			summary += fmt.Sprintf(", sha256 match=%v, authorized=%v", res.SHA256 == hex.EncodeToString(sum[:]), res.Authorized)
 		}
 		p.report(ok, name, "%s", summary)
 	}
