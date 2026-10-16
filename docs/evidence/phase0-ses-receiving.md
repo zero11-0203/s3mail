@@ -26,6 +26,7 @@
 | Receipt notification on the ingestion queue | SNS `Notification` envelope; `notificationType: Received`; `receipt.recipients` lists both envelope recipients, including the one absent from the headers |
 | Verdicts in the notification | spam `PASS`, virus `PASS`, SPF `FAIL`, DKIM `GRAY`, DMARC `FAIL` (expected for an unauthenticated `example.com` sender) |
 | Lifecycle configuration on the original bucket | None |
+| Owner admin session: `DeleteObject`, `PutBucketVersioning` (`Suspended`), `PutBucketLifecycleConfiguration` | Each rejected with `AccessDenied` from the explicit deny in the bucket policy |
 
 The rule creation also wrote `inbound/AMAZON_SES_SETUP_NOTIFICATION`, which stays in the archive like any other object.
 
@@ -37,6 +38,5 @@ The rule creation also wrote `inbound/AMAZON_SES_SETUP_NOTIFICATION`, which stay
 
 ## Not yet checked
 
-- The deny statements were not exercised against a live delete, lifecycle or versioning call; the owner runs them from an admin session (each must return `AccessDenied`).
 - Messages near the 40 MB limit, a sender without STARTTLS, and the SNS delivery DLQ path.
 - No processing Lambda consumes the queue yet; notifications expire after 14 days, while their originals stay in S3.
