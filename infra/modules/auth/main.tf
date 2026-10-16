@@ -28,12 +28,14 @@ resource "aws_cognito_user_pool" "this" {
     enabled = true
   }
 
+  # NIST SP 800-63B: at least 8 characters when MFA is also required, and
+  # no composition rules (they push users toward predictable patterns).
   password_policy {
-    minimum_length                   = 14
-    require_lowercase                = true
-    require_uppercase                = true
-    require_numbers                  = true
-    require_symbols                  = true
+    minimum_length                   = 8
+    require_lowercase                = false
+    require_uppercase                = false
+    require_numbers                  = false
+    require_symbols                  = false
     temporary_password_validity_days = 3
   }
 
