@@ -54,6 +54,8 @@ terraform.rc
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# Backend settings name the account-specific state bucket
+infra/backend.hcl
 
 # Phase 4 webmail (Node.js)
 node_modules/

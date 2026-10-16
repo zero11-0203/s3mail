@@ -45,7 +45,7 @@ DNS is hosted in **Amazon Route 53** and every record is managed by Terraform. C
 
 **Mail records:** SES is used only to receive mail. The `mail-inbound` module declares the **inbound MX record for the SES receiving endpoint** and the required SES domain identity and TXT ownership-verification record, using the SES domain-identity API. Receiving requires ownership verification; see [SES receiving domain verification](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-verification.html). SES sending DKIM and custom MAIL FROM records are unnecessary. Sending-side records (DKIM, return path, SPF) are declared by the relay module ([mail flow](../specs/mail-flow.md#design)), and a DMARC TXT record is declared explicitly.
 
-SES inbound receipt is available only in some regions, so the region choice follows from it.
+SES inbound receipt is available only in some regions, so the region choice follows from it. The region is a deployment variable (`region`) with no default: choose any region listed among the [SES email receiving endpoints](https://docs.aws.amazon.com/general/latest/gr/ses.html). All receiving resources except S3 buckets must be in the SES region, so every project resource uses the same one. The reference deployment uses `us-east-1`; Phase 0 still has to prove receipt there on the pilot subdomain.
 
 ### Queue configuration
 
