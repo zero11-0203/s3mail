@@ -1,0 +1,12 @@
+{
+  "Type": "Notification",
+  "MessageId": "00000000-0000-4000-8000-000000000001",
+  "TopicArn": "arn:aws:sns:us-east-1:111111111111:s3mail-inbound-receipts",
+  "Subject": "Amazon SES Email Receipt Notification",
+  "Message": "{\"notificationType\": \"Received\", \"mail\": {\"timestamp\": \"2026-10-17T06:40:12.345Z\", \"source\": \"probe@example.net\", \"messageId\": \"s2examplemessageid0000000000000000000001\", \"destination\": [\"alice@example.com\"], \"headersTruncated\": false, \"commonHeaders\": {\"from\": [\"Probe <probe@example.net>\"], \"to\": [\"alice@example.com\"], \"subject\": \"synthetic\"}}, \"receipt\": {\"timestamp\": \"2026-10-17T06:40:12.345Z\", \"processingTimeMillis\": 412, \"recipients\": [\"alice+news@example.com\", \"bob@example.com\"], \"spamVerdict\": {\"status\": \"PASS\"}, \"virusVerdict\": {\"status\": \"PASS\"}, \"spfVerdict\": {\"status\": \"FAIL\"}, \"dkimVerdict\": {\"status\": \"GRAY\"}, \"dmarcVerdict\": {\"status\": \"FAIL\"}, \"dmarcPolicy\": \"reject\", \"action\": {\"type\": \"S3\", \"topicArn\": \"arn:aws:sns:us-east-1:111111111111:s3mail-inbound-receipts\", \"bucketName\": \"s3mail-originals-test\", \"objectKeyPrefix\": \"inbound/\", \"objectKey\": \"inbound/s2examplemessageid0000000000000000000001\"}}}",
+  "Timestamp": "2026-10-17T06:40:13.000Z",
+  "SignatureVersion": "1",
+  "Signature": "synthetic",
+  "SigningCertURL": "https://sns.us-east-1.amazonaws.com/synthetic.pem",
+  "UnsubscribeURL": "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe"
+}

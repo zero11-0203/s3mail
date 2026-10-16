@@ -1,5 +1,5 @@
 # Root configuration for the single deployed environment. Modules (dns,
-# mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search, auth, ops)
+# mail-store, mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search, auth, ops)
 # are added as each phase needs them; see docs/operations/deployment.md.
 
 # Phase 0 streaming spike; temporary and disabled by default.
@@ -23,11 +23,20 @@ module "dns" {
   records   = module.mail_inbound.dns_records
 }
 
+module "mail_store" {
+  source = "../modules/mail-store"
+}
+
 module "mail_inbound" {
   source = "../modules/mail-inbound"
 
-  domain  = var.domain
-  aliases = var.mail_aliases
+  domain            = var.domain
+  aliases           = var.mail_aliases
+  ingest_zip        = var.ingest_zip
+  table_name        = module.mail_store.table_name
+  table_arn         = module.mail_store.table_arn
+  account_id        = module.mail_store.account_id
+  account_partition = module.mail_store.account_partition
 }
 
 # Waits until SES sees the _amazonses TXT record the dns module published.

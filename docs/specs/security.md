@@ -65,7 +65,7 @@ Interactive clients receive all three. Authorize each invocation in a batched re
 
 ### IAM role requirements
 
-**Every IAM role created for this project must follow least privilege**, including Phase 0 proofs of concept, runtime/service roles, CI roles, scheduled jobs, recovery and the later webmail. Maintain a checked-in permission inventory identifying each role's purpose, trusted principal, required AWS API operations, exact resources and documented exceptions. Follow [AWS IAM least-privilege guidance](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html).
+**Every IAM role created for this project must follow least privilege**, including Phase 0 proofs of concept, runtime/service roles, CI roles, scheduled jobs, recovery and the later webmail. Maintain a checked-in [permission inventory](../operations/permissions.md) identifying each role's purpose, trusted principal, required AWS API operations, exact resources and documented exceptions. Follow [AWS IAM least-privilege guidance](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html).
 
 - **Separate responsibilities:** give each Lambda with a distinct responsibility its own execution role. Keep runtime, deployment and owner-recovery roles separate. Sharing a binary does not justify sharing a broad role; derived-data cleanup and work-recovery jobs have separate permissions.
 - **Allow exact actions:** derive customer-managed/inline allowlists from actual SDK/runtime/event-source operations. Do not attach `AdministratorAccess`, `PowerUserAccess`, service `FullAccess` or account-wide `ReadOnlyAccess` policies. Avoid action wildcards. A permissions boundary is a ceiling, not a replacement for a narrow role policy.

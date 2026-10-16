@@ -1,0 +1,2 @@
+# Synthetic mock SES verification token ("test-token" in base64) in a terraform test, not a secret.
+d1a9d3f270c180cabd4135e953a09e1e58894267:infra/modules/mail-inbound/tests/inbound.tftest.hcl:generic-api-key:25

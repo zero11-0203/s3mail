@@ -67,3 +67,11 @@ output "recipients" {
   description = "Addresses the active receipt rule accepts."
   value       = local.recipients
 }
+
+output "ingest_function" {
+  value = aws_lambda_function.ingest.function_name
+}
+
+output "ingest_role_arn" {
+  value = aws_iam_role.ingest.arn
+}

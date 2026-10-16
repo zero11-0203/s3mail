@@ -14,6 +14,8 @@ output "mail_inbound" {
     recipients       = module.mail_inbound.recipients
     originals_bucket = module.mail_inbound.originals_bucket
     ingest_queue_url = module.mail_inbound.ingest_queue_url
+    ingest_function  = module.mail_inbound.ingest_function
+    table_name       = module.mail_store.table_name
   }
 }
 

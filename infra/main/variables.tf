@@ -19,6 +19,12 @@ variable "mail_aliases" {
   type        = list(string)
 }
 
+variable "ingest_zip" {
+  description = "Path to the ingest Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/ingest/bootstrap.zip"
+}
+
 variable "spike_stream_enabled" {
   description = "Deploy the Phase 0 response-streaming spike."
   type        = bool

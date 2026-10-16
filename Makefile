@@ -5,7 +5,7 @@ GOLANGCI_LINT ?= golangci-lint
 TF_DIRS := infra/bootstrap infra/main
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets spike-build
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build
 
 check: go-check tf-check secrets
 
@@ -43,18 +43,21 @@ tf-check:
 secrets:
 	gitleaks git --redact --no-banner .
 
-# Phase 0 streaming spike Lambdas (spike function and bearer-token
-# authorizer): linux/arm64 bootstrap binaries, zipped with a fixed timestamp
-# so unchanged code gives an unchanged zip hash.
+# Lambda zips: linux/arm64 bootstrap binaries, zipped with a fixed
+# timestamp so unchanged code gives an unchanged zip hash.
+LAMBDAS := ingest
+# Phase 0 streaming spike (spike function and bearer-token authorizer).
 SPIKE_LAMBDAS := spike-stream authorizer
 
-spike-build:
-	@set -e; for f in $(SPIKE_LAMBDAS); do \
-		echo "build $$f"; \
-		mkdir -p go/build/$$f; \
-		(cd go && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath \
-			-ldflags "-s -w -X github.com/zero11-0203/s3mail/go/internal/buildinfo.Version=$$(git rev-parse --short HEAD)" \
-			-o build/$$f/bootstrap ./cmd/$$f); \
-		touch -t 202601010000 go/build/$$f/bootstrap; \
-		(cd go/build/$$f && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap); \
-	done
+build: $(addprefix lambda-,$(LAMBDAS))
+
+spike-build: $(addprefix lambda-,$(SPIKE_LAMBDAS))
+
+lambda-%:
+	@echo "build $*"
+	@mkdir -p go/build/$*
+	@cd go && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath \
+		-ldflags "-s -w -X github.com/zero11-0203/s3mail/go/internal/buildinfo.Version=$$(git rev-parse --short HEAD)" \
+		-o build/$*/bootstrap ./cmd/$*
+	@touch -t 202601010000 go/build/$*/bootstrap
+	@cd go/build/$* && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap

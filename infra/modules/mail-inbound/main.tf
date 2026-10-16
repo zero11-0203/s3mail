@@ -275,3 +275,134 @@ resource "aws_ses_active_receipt_rule_set" "this" {
 
   depends_on = [aws_ses_receipt_rule.deliver]
 }
+
+# ---------------------------------------------------------------------------
+# Processing Lambda: consumes the ingestion queue and commits each delivery
+# to the mail table. Its role reads originals but cannot write or delete
+# them (docs/specs/security.md#iam-role-requirements).
+
+resource "aws_cloudwatch_log_group" "ingest" {
+  name              = "/aws/lambda/${var.name}-ingest"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role" "ingest" {
+  name = "${var.name}-ingest"
+  path = "/s3mail/"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ingest" {
+  name = "ingest"
+  role = aws_iam_role.ingest.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "WriteOwnLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.ingest.arn}:*"
+      },
+      {
+        Sid      = "ConsumeIngestQueue"
+        Effect   = "Allow"
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Resource = aws_sqs_queue.ingest.arn
+      },
+      {
+        Sid      = "ReadOriginalVersions"
+        Effect   = "Allow"
+        Action   = "s3:GetObjectVersion"
+        Resource = "${aws_s3_bucket.originals.arn}/${var.ses_key_prefix}*"
+      },
+      {
+        Sid       = "ListOriginalVersions"
+        Effect    = "Allow"
+        Action    = "s3:ListBucketVersions"
+        Resource  = aws_s3_bucket.originals.arn
+        Condition = { StringLike = { "s3:prefix" = "${var.ses_key_prefix}*" } }
+      },
+      {
+        Sid      = "CommitToOwnAccountPartition"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        Resource = var.table_arn
+        Condition = {
+          "ForAllValues:StringEquals" = { "dynamodb:LeadingKeys" = [var.account_partition] }
+        }
+      },
+      {
+        # X-Ray accepts no resource ARNs for these actions.
+        Sid      = "WriteTraces"
+        Effect   = "Allow"
+        Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "ingest" {
+  function_name    = "${var.name}-ingest"
+  role             = aws_iam_role.ingest.arn
+  runtime          = "provided.al2023"
+  architectures    = ["arm64"]
+  handler          = "bootstrap"
+  filename         = var.ingest_zip
+  source_code_hash = filebase64sha256(var.ingest_zip)
+  memory_size      = 256
+  timeout          = var.ingest_timeout_seconds
+  publish          = true
+
+  environment {
+    variables = {
+      ACCOUNT_ID = var.account_id
+      TABLE      = var.table_name
+      BUCKET     = aws_s3_bucket.originals.id
+      KEY_PREFIX = var.ses_key_prefix
+      TOPIC_ARN  = aws_sns_topic.receipts.arn
+      DOMAIN     = var.domain
+      ALIASES    = join(",", local.local_parts)
+    }
+  }
+
+  logging_config {
+    log_format            = "JSON"
+    log_group             = aws_cloudwatch_log_group.ingest.name
+    application_log_level = "INFO"
+    system_log_level      = "WARN"
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_iam_role_policy.ingest]
+}
+
+resource "aws_lambda_alias" "ingest_live" {
+  name             = "live"
+  function_name    = aws_lambda_function.ingest.function_name
+  function_version = aws_lambda_function.ingest.version
+}
+
+# One delivery per invocation: the visibility timeout covers one 60-second
+# processing deadline, and failures are still reported per item.
+resource "aws_lambda_event_source_mapping" "ingest" {
+  event_source_arn        = aws_sqs_queue.ingest.arn
+  function_name           = aws_lambda_alias.ingest_live.arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = 2
+  }
+}

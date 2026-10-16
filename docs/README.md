@@ -34,6 +34,7 @@ Measured Phase 0 results; requirements stay in the owning specs.
 | --- | --- |
 | DNS, Terraform, release workflow and shared testing strategy | [Deployment](operations/deployment.md) |
 | Permanent originals, mailbox deletion and rebuilds | [Recovery](operations/recovery.md) |
+| Deployed IAM roles and resource-policy grants | [Permission inventory](operations/permissions.md) |
 | Logs, metrics, alarms, tracing and budgets | [Monitoring](operations/monitoring.md) |
 
 A requirement has one canonical home. Other documents should link to it. Update the owning spec and its acceptance checks together when behavior changes; use the roadmap for stage/priority changes. Add a short decision record under `docs/decisions/` only when a new consequential choice needs rationale beyond its owning spec.

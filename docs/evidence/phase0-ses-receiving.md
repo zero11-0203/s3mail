@@ -35,8 +35,26 @@ The rule creation also wrote `inbound/AMAZON_SES_SETUP_NOTIFICATION`, which stay
 1. **The S3-action notification has no version ID.** `receipt.action` carries `bucketName`, `objectKeyPrefix` and `objectKey` only. Ingestion has to resolve the version itself (the key is the unique SES message ID, so its first version is the delivery) before recording the reference; see [mail flow](../specs/mail-flow.md#inbound-email).
 2. **TXT values are unquoted in the record contract.** The AWS provider adds the quotes; values passed already quoted were rejected by Route 53 as `InvalidCharacterString`. The `dns` module now rejects quoted TXT values.
 3. **SES does not reject on DMARC.** A sender whose domain publishes `p=reject` was accepted with `dmarcVerdict: FAIL`, so the [disposition policy](../specs/mail-flow.md#recipient-and-processing-policy) has to act on the verdict after acceptance.
+4. **Any principal with same-account `sqs:SendMessage` can inject a notification.** The queue policy limits SNS to the receipt topic, but identity policies in the account still apply, as the forged redelivery in the [ingestion round](#ingestion-round) showed. Ingestion only accepts notifications naming the receipt topic, the original bucket and a key equal to the prefix plus the message ID, and it reads the version that actually exists, so an injected notification can only reference a real delivery. Verifying the SNS signature would close the gap; until then, no project role is granted `SendMessage` on this queue.
+
+## Ingestion round
+
+Same day, after deploying the `ingest` Lambda (`go/cmd/ingest`, `provided.al2023` arm64, 256 MB, triggered through its `live` alias, one message per invocation, `ReportBatchItemFailures`) and the `s3mail-mail` table (`infra/modules/mail-store`, on-demand, PITR off, deletion protection on). The [permission inventory](../operations/permissions.md#s3mail-ingest-lambda-execution-role) lists its role.
+
+| Check | Result |
+| --- | --- |
+| The first probe, still queued from the receiving round | Committed on its second receive: Quarantine, reason `dmarc` (the `example.com` sender publishes `p=reject`) |
+| A second probe from a `.invalid` sender without DMARC | Committed to the Inbox |
+| Records per delivery | One transaction wrote `STATE` (sequence guard), `RECEIPT#<SES id>`, `EMAIL#<id>`, `LIST#<mailbox>#<time>#<id>`, `CHANGE#<seq>` and two `OUTBOX#<seq>#…` entries |
+| Exact original reference | The Email and receipt marker hold the bucket, key and version ID resolved through `ListObjectVersions` |
+| Envelope routing | The Email holds both envelope recipients (`<alias>` and `<alias>+phase0`); the header `To:` named one |
+| Receipt marker contents | Email ID, location, version, receipt time, sequence and parser version only; no sender, recipients or content |
+| A forged redelivery of the first receipt (same SES message ID, sent to the queue by the owner's admin session) | Outcome `duplicate`, same Email ID, account sequence unchanged at 2 |
+| Queues and DLQs afterwards | All empty; no `ERROR` or `WARN` log entries |
+
+Deferred to Phase 1: mailbox, thread and counter records; `MESSAGEID#` lookups and real threading (each delivery is currently its own thread); `VERSION#` history; the outbox dispatcher (outbox entries are committed and wait); the full MIME parser with legacy charsets (the header projection currently marks those `incomplete: charset`); OpenTelemetry spans; and DLQ alarms.
 
 ## Not yet checked
 
 - Messages near the 40 MB limit, a sender without STARTTLS, and the SNS delivery DLQ path.
-- No processing Lambda consumes the queue yet; notifications expire after 14 days, while their originals stay in S3.
+- Contention between concurrent commits and a crash between commit and queue deletion, beyond the unit tests with a fake table.

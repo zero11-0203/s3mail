@@ -68,3 +68,34 @@ variable "dns_ttl" {
   type        = number
   default     = 300
 }
+
+variable "ingest_zip" {
+  description = "Path to the ingest Lambda zip built by make build."
+  type        = string
+}
+
+variable "table_name" {
+  description = "Mail table name (mail-store module)."
+  type        = string
+}
+
+variable "table_arn" {
+  description = "Mail table ARN (mail-store module)."
+  type        = string
+}
+
+variable "account_id" {
+  description = "Internal account id that receives every delivery."
+  type        = string
+}
+
+variable "account_partition" {
+  description = "The account's partition key value, for the LeadingKeys condition."
+  type        = string
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch retention for the ingest function's logs."
+  type        = number
+  default     = 30
+}

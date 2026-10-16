@@ -59,7 +59,7 @@ SES inbound receipt is available only in some regions, so the region choice foll
 - **Protect data:** set `lifecycle { prevent_destroy = true }` on the hosted zone, message bucket, DynamoDB tables and Cognito User Pool. Enable S3 versioning; leave DynamoDB point-in-time recovery disabled for the current scope. The original bucket has no current/noncurrent expiration, no force-empty behavior and no original-delete IAM grants; disposable cleanup cannot target it.
 - **IAM creation:** every created role and policy follows the [IAM requirements and component inventory](../specs/security.md#iam-role-requirements); include permission changes in the reviewed Terraform plan and validate both allowed and denied operations.
 - **Build separately from deploy:** Terraform does not compile code. Build the Go Lambda zips in a separate step (Makefile or CI); from Phase 4, build the webmail container separately and pass its immutable ECR digest. Plans then reflect the exact deployed artifacts.
-- **Layout:** a single root configuration (one [environment](#environment)) calling small modules (`dns`, `mail-inbound`, `mail-outbound`, `relay-smtp2go`, `jmap-api`, `search`, `auth`, `ops`); add the optional `webmail` module in Phase 4. The initial root exposes no active webmail resources.
+- **Layout:** a single root configuration (one [environment](#environment)) calling small modules (`dns`, `mail-store`, `mail-inbound`, `mail-outbound`, `relay-smtp2go`, `jmap-api`, `search`, `auth`, `ops`); add the optional `webmail` module in Phase 4. The initial root exposes no active webmail resources.
 
 ### Planned code layout
 

@@ -21,14 +21,27 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:sns:us-east-1:111111111111:s3mail-inbound-receipts" }
   }
 
+  mock_resource "aws_lambda_alias" {
+    defaults = { arn = "arn:aws:lambda:us-east-1:111111111111:function:s3mail-ingest:live" }
+  }
+
+  mock_resource "aws_iam_role" {
+    defaults = { arn = "arn:aws:iam::111111111111:role/s3mail/s3mail-ingest" }
+  }
+
   mock_resource "aws_ses_domain_identity" {
-    defaults = { verification_token = "dGVzdC10b2tlbg==" }
+    defaults = { verification_token = "synthetic-verification-token" }
   }
 }
 
 variables {
-  domain  = "example.com"
-  aliases = ["alice", "lists"]
+  domain            = "example.com"
+  aliases           = ["alice", "lists"]
+  ingest_zip        = "tests/fake-lambda.zip"
+  table_name        = "s3mail-mail"
+  table_arn         = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-mail"
+  account_id        = "primary"
+  account_partition = "ACCOUNT#primary"
 }
 
 run "originals_are_versioned_encrypted_and_undeletable" {
@@ -166,4 +179,57 @@ run "rejects_tag_aliases" {
   }
 
   expect_failures = [var.aliases]
+}
+
+run "ingest_role_is_least_privilege" {
+  command = apply
+
+  assert {
+    condition = length([
+      for st in jsondecode(aws_iam_role_policy.ingest.policy).Statement : st
+      if length([for a in flatten([st.Action]) : a if can(regex("(?i)delete|put(object|bucket|lifecycle)|\\*", a)) && a != "sqs:DeleteMessage"]) > 0
+    ]) == 0
+    error_message = "the ingest role has no S3 write/delete grants and no action wildcards"
+  }
+
+  assert {
+    condition = alltrue([
+      for st in jsondecode(aws_iam_role_policy.ingest.policy).Statement :
+      st.Resource != "*" || st.Sid == "WriteTraces"
+    ])
+    error_message = "only the X-Ray statement uses Resource *"
+  }
+
+  assert {
+    condition = one([
+      for st in jsondecode(aws_iam_role_policy.ingest.policy).Statement : st.Condition["ForAllValues:StringEquals"]["dynamodb:LeadingKeys"]
+      if st.Sid == "CommitToOwnAccountPartition"
+    ]) == ["ACCOUNT#primary"]
+    error_message = "table access is limited to the account partition"
+  }
+
+  assert {
+    condition     = aws_lambda_event_source_mapping.ingest.function_name == aws_lambda_alias.ingest_live.arn
+    error_message = "the queue triggers the live alias"
+  }
+
+  assert {
+    condition     = contains(aws_lambda_event_source_mapping.ingest.function_response_types, "ReportBatchItemFailures")
+    error_message = "failures are reported per item"
+  }
+
+  assert {
+    condition     = aws_sqs_queue.ingest.visibility_timeout_seconds >= 6 * aws_lambda_function.ingest.timeout
+    error_message = "visibility timeout is at least six Lambda timeouts"
+  }
+
+  assert {
+    condition     = aws_lambda_function.ingest.environment[0].variables.ALIASES == "alice,lists,canary"
+    error_message = "the runtime registry comes from the same alias declaration as the receipt rule"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.ingest.retention_in_days == 30 && one(aws_lambda_function.ingest.tracing_config).mode == "Active"
+    error_message = "30-day logs and active tracing"
+  }
 }
