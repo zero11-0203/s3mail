@@ -9,3 +9,10 @@ module "spike_stream" {
 
   lambda_zip = var.spike_stream_zip
 }
+
+module "auth" {
+  source = "../modules/auth"
+
+  domain_prefix          = var.auth_domain_prefix
+  terminal_callback_urls = var.terminal_callback_urls
+}

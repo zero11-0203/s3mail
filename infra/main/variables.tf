@@ -20,3 +20,14 @@ variable "spike_stream_zip" {
   type        = string
   default     = "../../go/build/spike-stream/bootstrap.zip"
 }
+
+variable "auth_domain_prefix" {
+  description = "Globally unique Cognito managed login domain prefix (set in terraform.tfvars)."
+  type        = string
+}
+
+variable "terminal_callback_urls" {
+  description = "mail-auth loopback redirect URIs."
+  type        = list(string)
+  default     = ["http://localhost:53789/callback"]
+}
