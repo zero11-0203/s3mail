@@ -1,9 +1,0 @@
-# After the first local apply, copy to backend.tf and run:
-#   terraform init -migrate-state -backend-config=../backend.hcl
-terraform {
-  backend "s3" {
-    key          = "bootstrap/terraform.tfstate"
-    use_lockfile = true
-    encrypt      = true
-  }
-}
