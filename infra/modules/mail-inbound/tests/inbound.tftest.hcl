@@ -37,7 +37,7 @@ mock_provider "aws" {
 variables {
   domain            = "example.com"
   aliases           = ["alice", "lists"]
-  ingest_zip        = "tests/fake-lambda.zip"
+  ingest_zip        = "tests/fake-lambda.txt"
   table_name        = "s3mail-mail"
   table_arn         = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-mail"
   account_id        = "primary"
