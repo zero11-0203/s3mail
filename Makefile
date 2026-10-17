@@ -2,10 +2,10 @@
 # CI runs the same checks in .github/workflows/checks.yml.
 
 GOLANGCI_LINT ?= golangci-lint
-TF_DIRS := infra/bootstrap infra/main
+TF_DIRS := infra/bootstrap infra/main infra/webmail
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image
 
 check: go-check tf-check secrets
 
@@ -61,3 +61,18 @@ lambda-%:
 		-o build/$*/bootstrap ./cmd/$*
 	@touch -t 202601010000 go/build/$*/bootstrap
 	@cd go/build/$* && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap
+
+# Phase 4 webmail image (docs/operations/deployment.md#webmail-deployment):
+# linux/arm64 as a single manifest (Lambda rejects attestation indexes),
+# pushed to the infra/webmail repository under an immutable commit tag.
+# Prints the digest to set as image_digest in infra/webmail.
+webmail-image:
+	@test -n "$(WEBMAIL_REPO)" || { echo 'set WEBMAIL_REPO to: terraform -chdir=infra/webmail output -raw repository_url'; exit 1; }
+	@set -e; . ./webmail/versions.env; \
+	registry="$(firstword $(subst /, ,$(WEBMAIL_REPO)))"; region="$$(echo "$$registry" | cut -d. -f4)"; \
+	tag="$(WEBMAIL_REPO):$$(git rev-parse --short HEAD)-$$UPSTREAM_VERSION"; \
+	aws ecr get-login-password --region "$$region" | docker login --username AWS --password-stdin "$$registry" >/dev/null; \
+	docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+		--build-arg UPSTREAM_IMAGE="$$UPSTREAM_IMAGE" --build-arg ADAPTER_IMAGE="$$ADAPTER_IMAGE" \
+		-t "$$tag" --push webmail; \
+	echo "image_digest = \"$$(docker buildx imagetools inspect "$$tag" --format '{{.Manifest.Digest}}')\""

@@ -13,6 +13,7 @@
 - Infrastructure and runtime artifacts must be reproducible and pinned.
 - One environment uses local pre-deploy tests and owner-run positive release acceptance.
 - Initial plans have no enabled webmail resources or webmail deployment prerequisites.
+- The webmail deploys from its own Terraform root and state; mail-system plans never include its resources and do not need its image.
 - Stateful replacements require detection and deliberate repair; code rollback does not reverse data or infrastructure.
 
 ## Design
@@ -30,13 +31,13 @@ Use Terraform with the `hashicorp/aws` provider to define:
 9. Search: versioned S3 index prefix with the [search retention policy](../specs/search.md#index-pipeline), SQS wake-up queue/DLQ, indexer Lambda (reserved concurrency 1), separate search Lambda and sufficient scratch space.
 10. Cognito User Pool, the initial terminal OAuth app client (redirect URIs, PKCE), and resource server with the `mail.read`, `mail.write` and `mail.submit` scopes. Add the browser app client only with Phase 4.
 11. Observability and operations: explicit CloudWatch log groups with retention, the dashboard (alarms and their SNS topic only if the owner adds them; see [monitoring](monitoring.md#alarms-and-dashboard)), saved Logs Insights queries, X-Ray active tracing on every Lambda and the API Gateway stage, X-Ray sampling rules and the AWS Budgets alert.
-12. **Phase 4 only:** optional webmail module for the ECR repository, Lambda container/Web Adapter, execution role/session secrets, webmail REST gateway/custom domain/ACM/DNS, Cognito app client and CORS registration. `webmail_enabled = false` initially; disabled resources are absent from plans, deployment checks and the initial cost baseline.
+12. **Phase 4 only:** in the main root, the webmail registration (Cognito app client, authorizer allowlist entry and JMAP CORS origin), absent while `webmail_subdomain` is unset. In the separate `infra/webmail` root, the ECR repository, the Lambda container with Web Adapter and its execution role, the webmail REST gateway, custom domain, ACM certificate, its DNS records and an optional budget ([webmail deployment](#webmail-deployment)). Neither exists initially, so both are absent from plans, deployment checks and the initial cost baseline.
 
 ### DNS and region
 
 DNS is hosted in **Amazon Route 53** and every record is managed by Terraform. Cost is about $0.50/month for the hosted zone plus well under $0.40/month in queries at personal volume.
 
-- **Record declarations:** every enabled module that needs DNS (`mail-inbound`, `relay-*`, `jmap-api`, `auth`, and `webmail` from Phase 4) exposes a `dns_records` output: a list of `{name, type, ttl, values, purpose}` entries. A single `dns` module owns the hosted zone and turns the merged list into `aws_route53_record`s. The optional webmail module emits no records while disabled. Keeping declarations separate from Route 53 resources means records are defined in one place per feature and the DNS host could change later by replacing only the `dns` module.
+- **Record declarations:** every enabled module that needs DNS (`mail-inbound`, `relay-*`, `jmap-api`, `auth`, and `webmail` from Phase 4) exposes a `dns_records` output: a list of `{name, type, ttl, values, purpose}` entries. A single `dns` module owns the hosted zone and turns the merged list into `aws_route53_record`s. The exception is the separately applied webmail: `infra/webmail` writes its two records (the `webmail` CNAME and its ACM validation CNAME) into the existing zone itself, because the main root must not depend on its state; the `dns` module leaves records it does not declare alone, and names must not collide. Keeping declarations separate from Route 53 resources means records are defined in one place per feature and the DNS host could change later by replacing only the `dns` module.
 - **Portable records only:** use standard record types (MX, TXT, CNAME, SRV, A/AAAA where needed); no Route 53 alias records, health checks or routing policies. Public HTTP endpoints use subdomains with plain CNAMEs for gateway custom domains, never an apex CNAME. Add `webmail.example.com` and its certificate in Phase 4. JMAP autodiscovery uses the standard SRV record `_jmap._tcp.example.com` (RFC 8620 §2.2) pointing at the JMAP host.
 - **Certificates:** ACM certificates for the API custom domains use DNS validation; Terraform creates the validation records and waits for validation in the same apply.
 - **Verification:** after every deploy, CI resolves every declared record through public resolvers and fails if any is missing or different ([release checks](#cicd)), which also catches a broken delegation.
@@ -59,14 +60,15 @@ SES inbound receipt is available only in some regions, so the region choice foll
 - **Protect data:** set `lifecycle { prevent_destroy = true }` on the hosted zone, message bucket, DynamoDB tables and Cognito User Pool. Enable S3 versioning; leave DynamoDB point-in-time recovery disabled for the current scope. The original bucket has no current/noncurrent expiration, no force-empty behavior and no original-delete IAM grants; disposable cleanup cannot target it.
 - **IAM creation:** every created role and policy follows the [IAM requirements and component inventory](../specs/security.md#iam-role-requirements); include permission changes in the reviewed Terraform plan and validate both allowed and denied operations.
 - **Build separately from deploy:** Terraform does not compile code. Build the Go Lambda zips in a separate step (Makefile or CI); from Phase 4, build the webmail container separately and pass its immutable ECR digest. Plans then reflect the exact deployed artifacts.
-- **Layout:** a single root configuration (one [environment](#environment)) calling small modules (`dns`, `mail-store`, `mail-inbound`, `mail-outbound`, `relay-smtp2go`, `jmap-api`, `search`, `auth`, `ops`); add the optional `webmail` module in Phase 4. The initial root exposes no active webmail resources.
+- **Layout:** a main root configuration (one [environment](#environment)) calling small modules (`dns`, `mail-store`, `mail-inbound`, `mail-outbound`, `relay-smtp2go`, `jmap-api`, `search`, `auth`, `ops`). The Phase 4 `webmail` module is called only by the separate `infra/webmail` root, with its own state key in the same state bucket. The main root exposes no active webmail resources until the webmail is registered.
 
 ### Planned code layout
 
 ```text
 infra/
   bootstrap/      State bucket, GitHub OIDC provider, CI roles and permissions boundary, artifact bucket (applied by hand)
-  main/           Core modules; optional webmail module introduced in Phase 4
+  main/           Core modules and the Phase 4 webmail registration
+  webmail/        Phase 4 webmail hosting, applied separately with its own state
 go/
   cmd/            Lambda entry points (ingest, dispatch, index, search, jmap, push, submit, bounce, maintenance, canary) and mail-auth/mail-admin CLIs
   internal/       JMAP protocol, MIME parsing, storage, search index and text segmentation, relay interface and adapters (smtp, fake)
@@ -76,6 +78,16 @@ README.md         Project overview; docs/README.md is the documentation index
 AGENTS.md         Coding-task routing and repository guidance
 webmail/          Phase 4: upstream/adapter version locks, Lambda Dockerfile and browser acceptance fixtures
 ```
+
+### Webmail deployment
+
+The webmail (Phase 4, [browser hosting](../specs/clients.md#browser-hosting-and-client-safety)) is a separate deployment unit. The mail system works the same whether it exists or not, and its CLI path is the fallback when a webmail release fails.
+
+- **Boundary:** the main root owns everything the mail API trusts: the Cognito app client, the authorizer allowlist and the CORS origin, all created by setting `webmail_subdomain`. `infra/webmail` owns the hosting. It takes the main root's `webmail` output as plain variables and looks up the hosted zone by name; it never reads the main state, and the main root never references it. Removing the registration from main stops the webmail from obtaining or using tokens even if its hosting remains.
+- **First deployment:** (1) set `webmail_subdomain` in `infra/main` and apply it; (2) copy `terraform -chdir=infra/main output -json webmail` into `infra/webmail/terraform.tfvars`, initialize with `terraform init -backend-config=../backend.hcl` and apply with `image_digest` unset, which creates only the ECR repository; (3) run `make webmail-image WEBMAIL_REPO=<repository_url>`, which builds the pinned linux/arm64 image from `webmail/versions.env`, pushes it under an immutable commit tag and prints its digest; (4) set `image_digest` and apply again to create the function, `live` alias, gateway, certificate, custom domain and records.
+- **Updates and rollback:** change `webmail/versions.env` (versions, commit and digests together, and `webmail_locales` in main if upstream locales changed), rebuild and apply the new digest. The plan of a release changes only the function image, version and alias. Roll back by applying a previous digest; the repository keeps the newest ten images.
+- **Removal:** destroying `infra/webmail` removes the hosting only (an ECR repository with images must be emptied first); unset `webmail_subdomain` and apply main to remove the registration.
+- **Cost attribution:** resources of this root carry the `Component=webmail` tag. The optional budget filters on it once that tag is activated as a cost allocation tag in Billing.
 
 ### Environment
 
@@ -141,7 +153,7 @@ A later AI agent project would add its own build, test and evaluation jobs to th
 - Delegate the domain's nameservers at the registrar to the Route 53 hosted zone, once, after the zone is populated and verified.
 - Sign up for SMTP2GO, add and verify the sender domain, configure the bounce/complaint webhook, and store the SMTP credentials and webhook secret in Secrets Manager.
 - Create the personal Cognito user with a temporary password (no invitation message) and set the real password at first login.
-- Enroll independent recovery methods and run Phase 0 client/transport checks using aerc. In Phase 4, set any webmail session secret out of band in Secrets Manager and validate its browser login configuration; no VM management key is required.
+- Enroll independent recovery methods and run Phase 0 client/transport checks using aerc. In Phase 4, validate the webmail's browser login configuration; the pinned OAuth-only client needs no session secret, and no VM management key is required. Activate the `Component` cost allocation tag if the webmail budget is used.
 - Rehearse [recovery](recovery.md#failure-handling) and the owner positive acceptance checklist before directing primary mail here.
 
 Do not accidentally delete the hosted zone, message bucket, DynamoDB content or Cognito User Pool during routine `terraform apply` runs. Follow the original-retention policy; additional backup infrastructure is out of scope.

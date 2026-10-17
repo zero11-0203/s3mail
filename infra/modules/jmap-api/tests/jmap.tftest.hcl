@@ -149,6 +149,75 @@ run "only_the_api_invokes_search" {
   }
 }
 
+run "cors_is_off_by_default" {
+  command = apply
+
+  assert {
+    condition     = length(aws_api_gateway_method.preflight) == 0 && length(aws_api_gateway_gateway_response.cors) == 0
+    error_message = "no preflight or CORS gateway response without a registered origin"
+  }
+
+  assert {
+    condition     = alltrue([for f in aws_lambda_function.fn : !contains(keys(f.environment[0].variables), "CORS_ORIGIN")])
+    error_message = "no function allows a browser origin by default"
+  }
+
+  assert {
+    condition     = !contains(keys(aws_api_gateway_gateway_response.unauthorized.response_parameters), "gatewayresponse.header.Access-Control-Allow-Origin")
+    error_message = "401s name no origin by default"
+  }
+}
+
+run "cors_allows_only_the_registered_origin" {
+  command = apply
+
+  variables {
+    cors_origin = "https://webmail.example.com"
+  }
+
+  assert {
+    condition     = keys(aws_api_gateway_method.preflight) == keys(aws_api_gateway_method.route)
+    error_message = "every JMAP route answers its preflight"
+  }
+
+  assert {
+    condition     = alltrue([for m in aws_api_gateway_method.preflight : m.http_method == "OPTIONS" && m.authorization == "NONE"]) && alltrue([for i in aws_api_gateway_integration.preflight : i.type == "MOCK"])
+    error_message = "only uncredentialed OPTIONS preflights bypass the authorizer, with no Lambda behind them"
+  }
+
+  assert {
+    condition     = alltrue([for m in aws_api_gateway_method.route : m.authorization == "CUSTOM"])
+    error_message = "the JMAP routes keep the bearer authorizer"
+  }
+
+  assert {
+    condition = alltrue([for r in aws_api_gateway_integration_response.preflight :
+    r.response_parameters["method.response.header.Access-Control-Allow-Origin"] == "'https://webmail.example.com'"])
+    error_message = "preflights allow exactly the registered origin"
+  }
+
+  assert {
+    condition = alltrue([for r in concat([aws_api_gateway_gateway_response.unauthorized], values(aws_api_gateway_gateway_response.cors)) :
+    r.response_parameters["gatewayresponse.header.Access-Control-Allow-Origin"] == "'https://webmail.example.com'"])
+    error_message = "gateway errors, including the 401, are readable by the origin"
+  }
+
+  assert {
+    condition     = alltrue([for f in aws_lambda_function.fn : f.environment[0].variables["CORS_ORIGIN"] == "https://webmail.example.com"])
+    error_message = "every JMAP function allows the origin"
+  }
+}
+
+run "cors_origin_is_a_bare_https_origin" {
+  command = plan
+
+  variables {
+    cors_origin = "https://webmail.example.com/"
+  }
+
+  expect_failures = [var.cors_origin]
+}
+
 run "owner_subject_must_be_a_uuid" {
   command = plan
 

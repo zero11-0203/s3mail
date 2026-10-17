@@ -10,7 +10,8 @@
 // enables text conditions and SearchSnippet/get through the search function.
 // SEND_ALIASES (comma-separated local parts, never the canary), with
 // DOMAIN and the sendcmd policy variables, enables Identity and
-// EmailSubmission.
+// EmailSubmission. CORS_ORIGIN, when set, is the one browser origin
+// allowed to read responses (the Phase 4 webmail).
 package jmapcmd
 
 import (
@@ -50,6 +51,10 @@ func Start(component string, h Handler) {
 	}
 	if !strings.HasPrefix(env["PUBLIC_URL"], "https://") {
 		log.Fatal("PUBLIC_URL must be an https URL")
+	}
+	cors := os.Getenv("CORS_ORIGIN")
+	if cors != "" && (!strings.HasPrefix(cors, "https://") || strings.Count(cors, "/") != 2) {
+		log.Fatal("CORS_ORIGIN must be an https origin without a path")
 	}
 
 	var level slog.Level
@@ -101,6 +106,8 @@ func Start(component string, h Handler) {
 		if lc, ok := lambdacontext.FromContext(ctx); ok {
 			srv.Log = base.With("requestId", lc.AwsRequestID)
 		}
-		return h(srv, ctx, req, owners)
+		resp, err := h(srv, ctx, req, owners)
+		allowOrigin(cors, req, resp)
+		return resp, err
 	}, func(r *events.APIGatewayProxyStreamingResponse) *io.Reader { return &r.Body }))
 }

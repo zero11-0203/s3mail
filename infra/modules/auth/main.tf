@@ -105,6 +105,44 @@ resource "aws_cognito_user_pool_client" "terminal" {
   }
 }
 
+# Phase 4 webmail, registered only when its callbacks are set
+# (docs/specs/clients.md#browser-hosting-and-client-safety). Its server
+# exchanges the code and keeps the rotated refresh token in an httpOnly
+# cookie; only the s3mail scopes are granted, so no ID token is issued.
+resource "aws_cognito_user_pool_client" "webmail" {
+  count = length(var.webmail_callback_urls) > 0 ? 1 : 0
+
+  name         = "webmail"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret                      = false
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = aws_cognito_resource_server.s3mail.scope_identifiers
+  callback_urls                        = var.webmail_callback_urls
+  supported_identity_providers         = ["COGNITO"]
+  explicit_auth_flows                  = ["ALLOW_USER_SRP_AUTH"]
+
+  access_token_validity  = 5
+  id_token_validity      = 5
+  refresh_token_validity = 30
+  auth_session_validity  = 3
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  enable_token_revocation       = true
+  prevent_user_existence_errors = "ENABLED"
+
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 10
+  }
+}
+
 resource "aws_cognito_user_pool_domain" "this" {
   user_pool_id          = aws_cognito_user_pool.this.id
   domain                = var.domain_prefix
@@ -115,5 +153,13 @@ resource "aws_cognito_user_pool_domain" "this" {
 resource "aws_cognito_managed_login_branding" "terminal" {
   user_pool_id                = aws_cognito_user_pool.this.id
   client_id                   = aws_cognito_user_pool_client.terminal.id
+  use_cognito_provided_values = true
+}
+
+resource "aws_cognito_managed_login_branding" "webmail" {
+  count = length(aws_cognito_user_pool_client.webmail)
+
+  user_pool_id                = aws_cognito_user_pool.this.id
+  client_id                   = aws_cognito_user_pool_client.webmail[0].id
   use_cognito_provided_values = true
 }
