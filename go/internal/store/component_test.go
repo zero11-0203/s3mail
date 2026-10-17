@@ -453,6 +453,11 @@ func TestComponentDeliveryEvents(t *testing.T) {
 	if err := commit(m); !errors.Is(err, model.ErrDuplicateEvent) {
 		t.Errorf("replayed event: %v", err)
 	}
+	// The table's TTL removes the marker after the retention period.
+	marker, _ := a.DB.GetItem(ctx, &dynamodb.GetItemInput{TableName: &a.Table, Key: a.key("EVENT#smtp2go#e1"), ConsistentRead: aws.Bool(true)})
+	if ttl, ok := marker.Item["ttl"].(*types.AttributeValueMemberN); !ok || ttl.Value < fmt.Sprint(time.Now().Add(DeliveryMarkerRetention-time.Hour).Unix()) {
+		t.Errorf("marker ttl %v", marker.Item["ttl"])
+	}
 	back, _, _ := a.GetSubmission(ctx, "Sa")
 	if back.Recipients["x@example.net"].Delivered != "yes" || back.RelayID != "1q-2w" {
 		t.Errorf("submission %+v", back)

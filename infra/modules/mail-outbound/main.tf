@@ -392,6 +392,15 @@ resource "aws_secretsmanager_secret" "webhook" {
   recovery_window_in_days = 7
 }
 
+# The relay's REST API key, used only by the owner's mail-admin to list
+# and clear suppressions and read the plan cycle. No function can read
+# it; Terraform creates it empty and the value is set out of band.
+resource "aws_secretsmanager_secret" "api" {
+  name                    = "${var.name}/relay/${var.relay.name}-api"
+  description             = "${var.relay.name} API key for the owner's mail-admin (suppressions, usage), set out of band."
+  recovery_window_in_days = 7
+}
+
 # Reports are persisted here before the webhook is acknowledged; ones
 # that cannot be parsed or correlated end in the DLQ for inspection.
 resource "aws_sqs_queue" "delivery_dlq" {

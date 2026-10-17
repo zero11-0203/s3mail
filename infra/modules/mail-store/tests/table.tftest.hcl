@@ -6,6 +6,11 @@ run "table_has_no_backups_and_is_protected" {
   command = plan
 
   assert {
+    condition     = one(aws_dynamodb_table.mail.ttl).attribute_name == "ttl" && one(aws_dynamodb_table.mail.ttl).enabled
+    error_message = "disposable records expire through the table TTL"
+  }
+
+  assert {
     condition     = one(aws_dynamodb_table.mail.point_in_time_recovery).enabled == false
     error_message = "DynamoDB PITR stays disabled"
   }

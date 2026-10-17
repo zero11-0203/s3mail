@@ -30,6 +30,14 @@ resource "aws_dynamodb_table" "mail" {
     enabled = false
   }
 
+  # Removes disposable records only: expired upload records (BLOB#) and
+  # old delivery-report markers (EVENT#). Nothing durable carries ttl;
+  # the stream trigger ignores the removals.
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }

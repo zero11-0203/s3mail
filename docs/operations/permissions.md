@@ -198,7 +198,7 @@ It has no table, mail, relay-credential or other queue access; reserved concurre
 
 **Excluded for all outbound roles:**
 - No S3 write or delete; only the worker reads originals, by exact version and only under `composed/` and `imported/`.
-- Only the worker reads the relay credential secret and only the webhook receiver reads the webhook secret; no role can write a secret or the relay parameter (all are set out of band).
+- Only the worker reads the relay credential secret and only the webhook receiver reads the webhook secret; no role can write a secret or the relay parameter (all are set out of band). No function can read the relay API key (`s3mail/relay/smtp2go-api`); only the owner's `mail-admin` uses it.
 - Only the dispatcher deletes table items. Worker, recovery and delivery commits write STATE, CHANGE, SUBMISSION, ATTEMPT, QUOTA and OUTBOX records and never delete; attempt records are append-only.
 - No `dynamodb:Scan`, SES, SNS, IAM or `sts:AssumeRole`.
 

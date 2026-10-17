@@ -33,11 +33,12 @@ Use unique keys and exact version references for originals rather than overwriti
 | Trash/Junk/Quarantine | Keep visible until explicit owner deletion initially; review quarantine/DLQ alarms rather than auto-discarding accepted mail |
 | JMAP ID-only change history and object tombstones | Follow the [history window, floor and consumer checkpoint contract](../specs/storage-sync.md#dynamodb-storage-and-consistency-contract); pending durable work is retained separately |
 | Ingestion receipt/deletion markers | Minimal replay guards for the account lifetime; retain source identity/version references and deletion generation without message bodies or address projections |
-| Temporary unattached uploads | Expire after 24 hours in the disposable bucket; before accepting an import, promote its complete durable MIME to the original bucket |
+| Temporary unattached uploads | Expire after 24 hours in the disposable bucket; the table TTL removes their `BLOB#` records a day later; before accepting an import, promote its complete durable MIME to the original bucket |
 | Destroyed Email's derived data | Deny access immediately; remove unreferenced extracted attachments/body projections, residual search text and sensitive historical metadata within seven days; original MIME remains permanently |
 | Search snapshots | Follow the [index version lifecycle](../specs/search.md#index-pipeline); mailbox deletion also purges snapshots containing deleted messages, regardless of lifecycle protection |
 | Backups / scheduled exports | Not configured; original S3 versioning remains enabled, and DynamoDB PITR is disabled |
 | Submission evidence | Retain attempt/submission audit and correlation records at least 35 days and until resolved; never replay them as a new send merely because a queue is replayed or metadata is rebuilt |
+| Delivery-report deduplication markers | The table TTL removes them 90 days after they are written; delivery state is monotonic, so a later replay changes nothing final |
 
 Email destruction commits a content-free deletion marker and cleanup outbox work together with removal of visible references. Normal JMAP get/query/search/download must not expose the retained original through an old ID. Retaining the original is not authorization to recreate the Email. Ordinary replay, reindex and rebuild respect surviving deletion markers; an intentional owner recovery/import is a separate explicit action with a new logical ID.
 

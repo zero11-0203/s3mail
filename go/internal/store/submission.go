@@ -135,11 +135,19 @@ func (a *Account) sendItems(m model.Mutation, seq int64) []types.TransactWriteIt
 
 func relayKey(relay, id string) string { return "RELAYID#" + relay + "#" + id }
 
+// DeliveryMarkerRetention is how long a delivery report's deduplication
+// marker is kept: well beyond the 30 days the relay may redeliver
+// (docs/specs/mail-flow.md#webhook-idempotency). A report replayed after
+// that cannot undo a final state, which is monotonic.
+const DeliveryMarkerRetention = 90 * 24 * time.Hour
+
 // deliveryItem writes the delivery report's deduplication marker; it
-// follows the quota items so its cancellation can be classified.
+// follows the quota items so its cancellation can be classified. The
+// table's TTL removes it after DeliveryMarkerRetention.
 func (a *Account) deliveryItem(d *model.DeliveryMarker) types.TransactWriteItem {
 	return a.put("EVENT#"+d.Relay+"#"+d.EventID, map[string]types.AttributeValue{
 		"submissionId": s(d.SubmissionID), "at": s(sortTime(d.At)),
+		"ttl": n(a.now().Add(DeliveryMarkerRetention).Unix()),
 	}, absent)
 }
 

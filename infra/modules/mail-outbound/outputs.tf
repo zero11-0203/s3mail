@@ -42,3 +42,8 @@ output "delivery_dlq_arn" {
 output "delivery_queue_arn" {
   value = aws_sqs_queue.delivery.arn
 }
+
+output "api_secret_arn" {
+  description = "Set its value out of band: the relay API key for mail-admin."
+  value       = aws_secretsmanager_secret.api.arn
+}
