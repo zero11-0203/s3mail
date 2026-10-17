@@ -4,12 +4,12 @@
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns logs, metrics, alerts, tracing and cost visibility. Covers backend operations now and webmail when enabled in Phase 4.
+**Status: partly implemented; see [current implementation](#current-implementation).** Owns logs, metrics, alerts, tracing and cost visibility. Covers backend operations now and webmail when enabled in Phase 4.
 
 ## Required behavior and invariants
 
 - Telemetry must not expose mail content, addresses or credentials.
-- Alert delivery must work independently of this mailbox.
+- Alarms are visible without this mailbox. An external notification channel is optional; if one is added, its delivery must not depend on this mail system.
 - Real-traffic alarms and maintenance completion checks are not continuous synthetic availability tests.
 - Budget permanently retained original bytes/versions, disposable storage, reader refreshes, connected push duration and telemetry dimensions. Mailbox deletion does not reduce the original archive footprint.
 
@@ -35,7 +35,7 @@ Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**
 ### Alarms and dashboard
 
 - Alarms cover any DLQ entry, ingestion/outbox backlog, JMAP failures, expired send leases/unknown acceptance, relay quota, index lag over six minutes, snapshot size/cold-search latency, auth spikes, missing work-recovery/GC completion, derived cleanup approaching seven days and cost budgets. Real-traffic alarms have the accepted no-traffic blind spot ([deployment policy](deployment.md#cicd)); they are not represented as an end-to-end availability monitor.
-- Alarm notifications go through SNS to an **address outside this mail system** (and optionally a mobile push), so alerts still arrive when the mail system itself is broken.
+- Alarms show on the dashboard. The owner chose not to configure notifications; if they are added later, they go through SNS to an **address outside this mail system** (and optionally a mobile push), so alerts still arrive when the mail system itself is broken.
 - One CloudWatch dashboard shows the mail path end to end: inbound volume and lag, JMAP latency and errors, submissions and bounces, push connections, alarms.
 
 ### Tracing (X-Ray)
@@ -45,13 +45,27 @@ Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**
 - Trace context propagates from instrumented ingestion through dispatcher/SQS work using supported trace headers/links. SES/SNS receipt delivery does not originate an application trace, and separate retries/batches may be linked traces rather than one continuous trace. Do not put mail headers/content into propagation attributes.
 - **Sampling:** at personal volume, sample all API and ingestion requests; the push Lambda records one trace per connection without spans for its periodic state polls, to keep trace size and cost down. Usage should stay within the X-Ray free tier.
 
+## Current implementation
+
+What is deployed (`infra/modules/ops`, the Lambda modules and `go/internal/send`) and where it is narrower than the design above:
+
+- **Alarms**, all without actions, on the `s3mail` dashboard's alarm panel (`terraform output ops`):
+  - any message in a DLQ: ingest, SNS receipt delivery, index, submission and relay delivery reports;
+  - backlog: the oldest ingest message older than 15 minutes, the oldest index wake-up older than six minutes;
+  - Lambda errors, one alarm per group (inbound, JMAP with the authorizer, outbound, search) summing its functions;
+  - API Gateway 5XX responses;
+  - `Mail/SubmissionsUnknown` above zero, a gauge the one-minute work-recovery sweep logs in Embedded Metric Format with the count of submissions waiting for the owner to resolve unknown acceptance (`mail-admin submissions`). Missing data also raises it, so a stopped sweep is visible.
+- **Dashboard:** alarms, function errors and throttles, queue depth and age, API requests, errors and latency, and the unknown-acceptance gauge.
+- **Tracing:** active X-Ray tracing on every Lambda and on the API stage. The code has no OpenTelemetry instrumentation yet, so traces show the gateway and Lambda invocation segments only, without DynamoDB, S3, SQS or SMTP spans or propagation through queues.
+- **Not yet:** a notification channel (not wanted for now), cost budgets, the other custom metrics and alarms listed above (quota use, auth spikes, snapshot size, GC completion), saved Logs Insights queries and the trace id in responses.
+
 ## Failure handling
 
-Investigate DLQs, backlog, unknown relay acceptance and failed maintenance using the dashboard and content-free identifiers. Follow [mail-flow reconciliation](../specs/mail-flow.md#outbound-email) for uncertain sends and [recovery](recovery.md#failure-handling) for restoration. External SNS alarm delivery remains available during mail outages.
+Investigate DLQs, backlog, unknown relay acceptance and failed maintenance using the dashboard and content-free identifiers. Follow [mail-flow reconciliation](../specs/mail-flow.md#outbound-email) for uncertain sends and [recovery](recovery.md#failure-handling) for restoration. Without a notification channel, alarms are seen only when the owner opens the dashboard.
 
 ## Acceptance checks
 
 - Capture logs, metrics and spans across normal and failing proxy/SDK/SMTP/webhook paths; assert the privacy rule.
-- Exercise alarms and external notification delivery, dashboard links and missing work-recovery/GC completion.
+- Exercise alarms, external notification delivery if configured, dashboard links and missing work-recovery/GC completion.
 - Verify pinned OpenTelemetry/ADOT instrumentation on `provided.al2023`, linked queue retries and bounded push traces.
 - Measure [search publication/reader costs](../specs/search.md#index-pipeline), push duration and custom metric count against the configured budget.

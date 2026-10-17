@@ -317,18 +317,27 @@ resource "aws_iam_role" "authorizer" {
 }
 
 # The authorizer only fetches the public JWKS over HTTPS and writes its
-# own logs.
+# own logs and traces.
 resource "aws_iam_role_policy" "authorizer" {
   name = "logs"
   role = aws_iam_role.authorizer.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid      = "WriteOwnLogs"
-      Effect   = "Allow"
-      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = "${aws_cloudwatch_log_group.authorizer.arn}:*"
-    }]
+    Statement = [
+      {
+        Sid      = "WriteOwnLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.authorizer.arn}:*"
+      },
+      {
+        # X-Ray accepts no resource ARNs for these actions.
+        Sid      = "WriteTraces"
+        Effect   = "Allow"
+        Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+        Resource = "*"
+      },
+    ]
   })
 }
 
@@ -355,6 +364,10 @@ resource "aws_lambda_function" "authorizer" {
     log_group             = aws_cloudwatch_log_group.authorizer.name
     application_log_level = "INFO"
     system_log_level      = "WARN"
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   depends_on = [aws_iam_role_policy.authorizer]
@@ -675,6 +688,9 @@ resource "aws_api_gateway_stage" "this" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   deployment_id = aws_api_gateway_deployment.this.id
   stage_name    = var.stage_name
+
+  # Each request is traced from the edge through the handler.
+  xray_tracing_enabled = true
 }
 
 # Initial interactive limits from docs/specs/security.md.

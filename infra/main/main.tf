@@ -1,6 +1,6 @@
-# Root configuration for the single deployed environment. Modules (dns,
-# mail-store, mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search, auth, ops)
-# are added as each phase needs them; see docs/operations/deployment.md.
+# Root configuration for the single deployed environment: the dns,
+# mail-store, mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search,
+# auth and ops modules; see docs/operations/deployment.md.
 
 # Phase 0 streaming spike; temporary and disabled by default.
 module "spike_stream" {
@@ -120,4 +120,30 @@ module "mail_outbound" {
   originals_bucket_arn = module.mail_inbound.originals_bucket_arn
   index_queue_url      = module.search.index_queue_url
   index_queue_arn      = module.search.index_queue_arn
+}
+
+# Alarms and the dashboard; no notification channel is configured.
+module "ops" {
+  source = "../modules/ops"
+
+  queues = {
+    # A receipt is ingested within seconds; an older one is being retried.
+    ingest = { arn = module.mail_inbound.ingest_queue_arn, max_age_seconds = 900 }
+    # Index lag beyond six minutes (docs/specs/search.md).
+    index           = { arn = module.search.index_queue_arn, max_age_seconds = 360 }
+    submit          = { arn = module.mail_outbound.submit_queue_arn }
+    delivery        = { arn = module.mail_outbound.delivery_queue_arn }
+    ingest-dlq      = { arn = module.mail_inbound.ingest_dlq_arn, dead_letter = true }
+    receipt-dlq     = { arn = module.mail_inbound.delivery_dlq_arn, dead_letter = true }
+    index-dlq       = { arn = module.search.index_dlq_arn, dead_letter = true }
+    submit-dlq      = { arn = module.mail_outbound.submit_dlq_arn, dead_letter = true }
+    relay-event-dlq = { arn = module.mail_outbound.delivery_dlq_arn, dead_letter = true }
+  }
+  functions = {
+    inbound  = [module.mail_inbound.ingest_function]
+    jmap     = concat(values(module.jmap_api.function_names), [module.jmap_api.authorizer_function_name])
+    outbound = values(module.mail_outbound.function_names)
+    search   = values(module.search.function_names)
+  }
+  api = module.jmap_api.api
 }

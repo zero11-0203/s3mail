@@ -20,3 +20,12 @@ output "webhook_url" {
   description = "The relay webhook URL, or null."
   value       = var.webhook == null ? null : "${local.base_url}/webhooks/${var.webhook.relay}"
 }
+
+output "authorizer_function_name" {
+  value = aws_lambda_function.authorizer.function_name
+}
+
+output "api" {
+  description = "The REST API name and stage, for alarms."
+  value       = { name = aws_api_gateway_rest_api.this.name, stage = aws_api_gateway_stage.this.stage_name }
+}

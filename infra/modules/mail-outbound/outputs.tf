@@ -38,3 +38,7 @@ output "webhook_secret_arn" {
 output "delivery_dlq_arn" {
   value = aws_sqs_queue.delivery_dlq.arn
 }
+
+output "delivery_queue_arn" {
+  value = aws_sqs_queue.delivery.arn
+}

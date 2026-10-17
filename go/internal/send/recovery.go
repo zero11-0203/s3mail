@@ -44,8 +44,12 @@ func (r *Recovery) Run(ctx context.Context) error {
 		return err
 	}
 	var errs []error
+	unknown := 0
 	for _, s := range subs {
 		now := r.now()
+		if s.Status == model.SubmissionUnknown {
+			unknown++
+		}
 		switch {
 		case s.Status == model.SubmissionActive && !now.Before(s.LeaseUntil):
 			after, done, err := commit(ctx, r.Store, s.ID, func(cur model.Submission) (*model.Mutation, error) {
@@ -58,6 +62,7 @@ func (r *Recovery) Run(ctx context.Context) error {
 			if done {
 				r.Log.Warn("lease expired", "submissionId", s.ID, "status", after.Status)
 				if after.Status == model.SubmissionUnknown {
+					unknown++
 					r.Log.Error("acceptance unknown", "submissionId", s.ID, "outcome", "acceptance_unknown")
 				}
 				if after.Status == model.SubmissionQueued && !paused {
@@ -68,5 +73,27 @@ func (r *Recovery) Run(ctx context.Context) error {
 			errs = append(errs, r.Queue.Enqueue(ctx, s.ID, 0))
 		}
 	}
+	r.gauge(unknown)
 	return errors.Join(errs...)
+}
+
+// MetricNamespace holds the custom mail metrics
+// (docs/operations/monitoring.md#metrics-cloudwatch).
+const MetricNamespace = "Mail"
+
+// gauge logs the number of submissions waiting for the owner to resolve
+// unknown acceptance as an Embedded Metric Format record, once a sweep, so
+// its alarm stays raised until every one is resolved. The production
+// logger adds the component dimension.
+func (r *Recovery) gauge(unknown int) {
+	r.Log.Info("unresolved submissions",
+		"_aws", map[string]any{
+			"Timestamp": r.now().UnixMilli(),
+			"CloudWatchMetrics": []map[string]any{{
+				"Namespace":  MetricNamespace,
+				"Dimensions": [][]string{{"component"}},
+				"Metrics":    []map[string]string{{"Name": "SubmissionsUnknown", "Unit": "Count"}},
+			}},
+		},
+		"SubmissionsUnknown", unknown)
 }

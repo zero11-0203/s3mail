@@ -19,7 +19,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 | Initial aerc/OAuth slice, response loss and two CLI sessions | [Clients](specs/clients.md#acceptance-checks) |
 | Permanent originals, derived cleanup, owner access and outbound-paused rebuild | [Recovery](operations/recovery.md#acceptance-checks) |
 | Positive release acceptance, nonce canary and coordinated rollback | [Deployment](operations/deployment.md#acceptance-checks) |
-| Mail-free telemetry, external alerts, budgets and tracing | [Monitoring](operations/monitoring.md#acceptance-checks) |
+| Mail-free telemetry, alarms, budgets and tracing | [Monitoring](operations/monitoring.md#acceptance-checks) |
 | Browser image, sessions, proxy/stream limits, display safety and CLI/browser state | [Phase 4 browser gate](specs/clients.md#browser-release-gate-phase-4) |
 
 ## Implementation phases

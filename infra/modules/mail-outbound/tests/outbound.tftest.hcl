@@ -105,6 +105,11 @@ run "least_privilege" {
   }
 
   assert {
+    condition     = alltrue([for f in aws_lambda_function.fn : one(f.tracing_config).mode == "Active"])
+    error_message = "every outbound function is traced"
+  }
+
+  assert {
     condition     = aws_lambda_function.fn["worker"].timeout < 120
     error_message = "the worker's timeout stays below the two-minute attempt lease"
   }

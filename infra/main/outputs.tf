@@ -51,3 +51,11 @@ output "mail_outbound" {
     function_names   = module.mail_outbound.function_names
   }
 }
+
+output "ops" {
+  description = "The monitoring dashboard and its alarms."
+  value = {
+    dashboard_url = module.ops.dashboard_url
+    alarm_names   = module.ops.alarm_names
+  }
+}

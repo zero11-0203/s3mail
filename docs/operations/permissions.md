@@ -85,6 +85,7 @@
 | Statement | Actions | Resource | Condition |
 | --- | --- | --- | --- |
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-authorizer` log group | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 **Excluded for all JMAP roles:**
 - No S3 delete or list. Only the API role writes S3: new originals under `imported/` and `composed/`, and uploads; nothing can write `inbound/` except SES.
@@ -105,6 +106,7 @@
 | `PublishIndex` | `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject` | `<index bucket>/index/*` | — |
 | `FindIndex` | `s3:ListBucket` | index bucket | — |
 | `ConsumeWakeUps` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-index` queue | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 A registration updates STATE and writes the SEARCH and one CHANGE record. `ListBucket` makes `HeadObject` on the not-yet-created index return 404 rather than 403; the bucket holds only index objects. The shared-table limitation applies.
 
@@ -118,6 +120,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-search` log group | — |
 | `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadIndexVersions` | `s3:GetObjectVersion` | `<index bucket>/index/*` | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 **Excluded for all search roles:**
 - No `dynamodb:DeleteItem`, no S3 delete of originals or index versions, no `dynamodb:Scan`.
@@ -135,6 +138,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `DrainOwnAccountOutbox` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:DeleteItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadTableStream` | `dynamodb:DescribeStream`, `dynamodb:GetRecords`, `dynamodb:GetShardIterator`, `dynamodb:ListStreams` | the table's stream | — |
 | `SendWakeUps` | `sqs:SendMessage` | `s3mail-index` and `s3mail-submit` queues | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 `DeleteItem` acknowledges outbox entries after their destination accepted the work; the code deletes only `OUTBOX#` keys, but IAM cannot restrict sort-key prefixes, so the shared-table limitation applies. The stream carries keys only, never mail content.
 
@@ -151,6 +155,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `ReadRelaySecret` | `secretsmanager:GetSecretValue` | `s3mail/relay/smtp2go` secret | — |
 | `ReadSendMaterial` | `s3:GetObjectVersion` | `<original bucket>/composed/*`, `<original bucket>/imported/*` | — |
 | `ConsumeAndRequeue` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes`, `sqs:SendMessage` | `s3mail-submit` queue | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 ### `s3mail-outbound-recovery` (Lambda execution role)
 
@@ -163,6 +168,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `ReadAndCommitOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadRelayParameter` | `ssm:GetParameter` | `/s3mail/relay` parameter | — |
 | `SendWakeUps` | `sqs:SendMessage` | `s3mail-submit` queue | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 ### `s3mail-outbound-webhook` (Lambda execution role)
 
@@ -174,6 +180,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-webhook` log group | — |
 | `ReadWebhookSecret` | `secretsmanager:GetSecretValue` | `s3mail/relay/smtp2go-webhook` secret | — |
 | `PersistNotifications` | `sqs:SendMessage` | `s3mail-delivery` queue | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 It has no table, mail, relay-credential or other queue access; reserved concurrency 2 bounds abuse of the unauthenticated route.
 
@@ -187,6 +194,7 @@ It has no table, mail, relay-credential or other queue access; reserved concurre
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-delivery` log group | — |
 | `ReadAndCommitOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ConsumeNotifications` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-delivery` queue | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 **Excluded for all outbound roles:**
 - No S3 write or delete; only the worker reads originals, by exact version and only under `composed/` and `imported/`.

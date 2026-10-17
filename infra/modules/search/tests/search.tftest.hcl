@@ -42,6 +42,11 @@ run "least_privilege" {
   }
 
   assert {
+    condition     = alltrue([for f in aws_lambda_function.fn : one(f.tracing_config).mode == "Active"])
+    error_message = "every search function is traced"
+  }
+
+  assert {
     condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
       for st in jsondecode(p.policy).Statement : !anytrue([
         for a in flatten([st.Action]) : contains(["dynamodb:DeleteItem", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:*", "dynamodb:*"], a)

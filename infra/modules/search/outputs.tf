@@ -18,3 +18,7 @@ output "index_dlq_arn" {
 output "index_queue_url" {
   value = aws_sqs_queue.index.url
 }
+
+output "function_names" {
+  value = { for k, f in aws_lambda_function.fn : k => f.function_name }
+}

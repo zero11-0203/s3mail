@@ -239,6 +239,13 @@ resource "aws_iam_role_policy" "fn" {
         Resource = "${aws_cloudwatch_log_group.fn[each.key].arn}:*"
       }],
       each.value.statements,
+      [{
+        # X-Ray accepts no resource ARNs for these actions.
+        Sid      = "WriteTraces"
+        Effect   = "Allow"
+        Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+        Resource = "*"
+      }],
     )
   })
 }
@@ -267,6 +274,10 @@ resource "aws_lambda_function" "fn" {
     log_group             = aws_cloudwatch_log_group.fn[each.key].name
     application_log_level = "INFO"
     system_log_level      = "WARN"
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   depends_on = [aws_iam_role_policy.fn]
