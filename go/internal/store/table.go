@@ -18,6 +18,7 @@
 //	RECEIPT#<sesMessageId>             receipt replay marker
 //	CHANGE#<seq>                       change record
 //	OUTBOX#<seq>#<destination>         committed dispatch work
+//	SEARCH                             registered search index generation
 package store
 
 import (
@@ -45,6 +46,8 @@ type Account struct {
 	AccountID string
 	// Backoff before retrying a sequence conflict; nil uses bounded jitter.
 	Backoff func(attempt int) time.Duration
+	// Now overrides the clock (tests).
+	Now func() time.Time
 }
 
 func (a *Account) pk() string { return "ACCOUNT#" + a.AccountID }
@@ -160,3 +163,10 @@ func idsByTypeAttr(m map[string][]string) types.AttributeValue {
 }
 
 func parseSortTime(v string) (time.Time, error) { return time.Parse(sortTimeLayout, v) }
+
+func (a *Account) now() time.Time {
+	if a.Now != nil {
+		return a.Now()
+	}
+	return time.Now()
+}

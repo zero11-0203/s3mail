@@ -123,6 +123,27 @@ run "roles_are_least_privilege" {
   }
 }
 
+run "only_the_api_invokes_search" {
+  command = apply
+
+  variables {
+    search_function_arn = "arn:aws:lambda:us-east-1:111111111111:function:s3mail-search-search:live"
+  }
+
+  assert {
+    condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
+      for s in jsondecode(p.policy).Statement : k == "api" && s.Resource == var.search_function_arn
+      if anytrue([for a in flatten([s.Action]) : startswith(a, "lambda:")])
+    ])]) && anytrue([for s in jsondecode(aws_iam_role_policy.fn["api"].policy).Statement : s.Action == "lambda:InvokeFunction"])
+    error_message = "only the API role invokes, and only the search alias"
+  }
+
+  assert {
+    condition     = aws_lambda_function.fn["api"].environment[0].variables["SEARCH_FUNCTION"] == var.search_function_arn && !contains(keys(aws_lambda_function.fn["download"].environment[0].variables), "SEARCH_FUNCTION")
+    error_message = "only the API function is configured for search"
+  }
+}
+
 run "owner_subject_must_be_a_uuid" {
   command = plan
 

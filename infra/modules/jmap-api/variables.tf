@@ -87,6 +87,12 @@ variable "ses_key_prefix" {
   type        = string
 }
 
+variable "search_function_arn" {
+  description = "The search function's alias ARN; only the API function may invoke it. Null disables text search."
+  type        = string
+  default     = null
+}
+
 variable "push_concurrency" {
   description = "Reserved concurrency of the push function: the cap on open EventSource streams."
   type        = number

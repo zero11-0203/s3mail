@@ -47,6 +47,7 @@
 | `ReadUploads` | `s3:GetObject` | `<blob bucket>/uploads/*` | — |
 | `ArchiveNewOriginals` | `s3:PutObject` | `<original bucket>/imported/*`, `<original bucket>/composed/*` | — |
 | `WriteUploads` | `s3:PutObject` | `<blob bucket>/uploads/*` | — |
+| `InvokeSearch` | `lambda:InvokeFunction` | `s3mail-search-search` `live` alias | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 `DeleteItem` removes listing, membership, index and summary records when an Email moves or is destroyed; Emails leave a deletion marker and their original is never deleted. Archive writes use new ids with `If-None-Match: *`; the bucket policy's delete deny still applies. The same shared-table limitation as for ingest applies.
@@ -88,8 +89,51 @@
 **Excluded for all JMAP roles:**
 - No S3 delete or list. Only the API role writes S3: new originals under `imported/` and `composed/`, and uploads; nothing can write `inbound/` except SES.
 - No `dynamodb:Scan`, no other table and no other partition.
-- No SQS, SNS, SES, secrets, IAM or `sts:AssumeRole`.
+- No SQS, SNS, SES, secrets, IAM or `sts:AssumeRole`; only the API role invokes a function, the search alias.
 - The download and push roles cannot write to the table; push cannot read S3.
+
+### `s3mail-search-indexer` (Lambda execution role)
+
+- **Module:** `infra/modules/search`
+- **Purpose:** the single index writer (reserved concurrency 1): replay changes, read the originals of new Emails, publish snapshots with conditional PUTs and register each generation ([search](../specs/search.md#index-pipeline)).
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-indexer` log group | — |
+| `ReadAndRegisterOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ReadOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/*` | — |
+| `PublishIndex` | `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject` | `<index bucket>/index/*` | — |
+| `FindIndex` | `s3:ListBucket` | index bucket | — |
+| `ConsumeWakeUps` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-index` queue | — |
+
+A registration updates STATE and writes the SEARCH and one CHANGE record. `ListBucket` makes `HeadObject` on the not-yet-created index return 404 rather than 403; the bucket holds only index objects. The shared-table limitation applies.
+
+### `s3mail-search-dispatcher` (Lambda execution role)
+
+- **Module:** `infra/modules/search`
+- **Purpose:** on a one-minute schedule, wake the indexer when Emails were created or destroyed after the registered generation.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-dispatcher` log group | — |
+| `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `SendWakeUps` | `sqs:SendMessage` | `s3mail-index` queue | — |
+
+### `s3mail-search-search` (Lambda execution role)
+
+- **Module:** `infra/modules/search`
+- **Purpose:** answer the API's text conditions and snippets from the registered generation.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-search` log group | — |
+| `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ReadIndexVersions` | `s3:GetObjectVersion` | `<index bucket>/index/*` | — |
+
+**Excluded for all search roles:**
+- No `dynamodb:DeleteItem`, no S3 delete of originals or index versions, no `dynamodb:Scan`.
+- Only the indexer writes (the table and the index bucket) and only it reads mail content; the dispatcher and search roles cannot read originals.
+- No SES, SNS, secrets, IAM or `sts:AssumeRole`.
 
 ## Resource policies
 
@@ -99,12 +143,15 @@
 | Original bucket | `*` | **Deny** `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:DeleteBucket`, `s3:PutLifecycleConfiguration`, `s3:PutBucketVersioning` | — |
 | Original bucket | `*` | **Deny** `s3:*` | `aws:SecureTransport` = false |
 | Blob bucket | `*` | **Deny** `s3:*` | `aws:SecureTransport` = false |
+| Index bucket | `*` | **Deny** `s3:*` | `aws:SecureTransport` = false |
 | Receipt SNS topic | `ses.amazonaws.com` | `SNS:Publish` | `AWS:SourceAccount`, `AWS:SourceArn` as above |
 | Ingestion queue, delivery DLQ | `sns.amazonaws.com` | `sqs:SendMessage` | `aws:SourceArn` = receipt topic |
 | Ingestion DLQ | — | Redrive allowed only from the ingestion queue | — |
 | `s3mail-jmap-api` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/.well-known/jmap`, `<api>/*/POST/jmap` and `<api>/*/POST/upload/*` |
 | `s3mail-jmap-download` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/download/*` |
 | `s3mail-jmap-push` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/eventsource` |
+| `s3mail-search-dispatcher` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-search-dispatch` schedule rule |
+| Index DLQ | — | Redrive allowed only from the index queue | — |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
 
 Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues; see [the evidence finding](../evidence/phase0-ses-receiving.md#findings).
@@ -112,5 +159,5 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The dispatcher, indexer, submission, webhook, GC and recovery roles. Uploads run in the API role.
+- The outbox dispatcher, submission, webhook, GC and recovery roles. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.

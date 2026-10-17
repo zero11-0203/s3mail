@@ -71,4 +71,18 @@ module "jmap_api" {
   originals_bucket_name = module.mail_inbound.originals_bucket
   originals_bucket_arn  = module.mail_inbound.originals_bucket_arn
   ses_key_prefix        = module.mail_inbound.ses_key_prefix
+  search_function_arn   = module.search.search_function_arn
+}
+
+module "search" {
+  source = "../modules/search"
+
+  indexer_zip          = var.search_indexer_zip
+  dispatcher_zip       = var.search_dispatcher_zip
+  search_zip           = var.search_zip
+  table_name           = module.mail_store.table_name
+  table_arn            = module.mail_store.table_arn
+  account_id           = module.mail_store.account_id
+  account_partition    = module.mail_store.account_partition
+  originals_bucket_arn = module.mail_inbound.originals_bucket_arn
 }

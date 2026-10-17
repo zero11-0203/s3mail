@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/mail"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zero11-0203/s3mail/go/internal/search"
 )
 
 func emailChanges(ctx context.Context, c *call) (any, *MethodError) {
@@ -52,8 +56,24 @@ type emailCtx struct {
 type predicate = func(emailCtx) bool
 
 // filterParser builds predicates and records whether any condition reads
-// other thread members.
-type filterParser struct{ threadDependent bool }
+// other thread members. Index-backed conditions are collected in conds;
+// their predicates read hits once the search function has answered.
+type filterParser struct {
+	threadDependent bool
+	conds           []search.Condition
+	terms           []string
+	hits            []map[string]bool
+}
+
+// indexed adds an index-backed condition and returns its predicate.
+func (fp *filterParser) indexed(field, value string) func(EmailMeta) bool {
+	i := len(fp.conds)
+	fp.conds = append(fp.conds, search.Condition{Field: field, Value: value})
+	if field != "hasAttachment" && field != "bcc" {
+		fp.terms = append(fp.terms, value)
+	}
+	return func(m EmailMeta) bool { return fp.hits[i][m.ID] }
+}
 
 // parse builds a predicate from a FilterOperator/FilterCondition tree.
 // Text and body search use the search index (docs/specs/search.md).
@@ -83,6 +103,10 @@ func (fp *filterParser) parse(raw json.RawMessage, depth int) (predicate, *Metho
 		To                      *string    `json:"to"`
 		Cc                      *string    `json:"cc"`
 		Subject                 *string    `json:"subject"`
+		Bcc                     *string    `json:"bcc"`
+		Text                    *string    `json:"text"`
+		Body                    *string    `json:"body"`
+		HasAttachment           *bool      `json:"hasAttachment"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -102,6 +126,15 @@ func (fp *filterParser) parse(raw json.RawMessage, depth int) (predicate, *Metho
 		return false
 	}
 	kw := func(k *string) string { return strings.ToLower(*k) }
+	var index []func(EmailMeta) bool
+	for field, v := range map[string]*string{"text": f.Text, "body": f.Body, "bcc": f.Bcc} {
+		if v != nil {
+			index = append(index, fp.indexed(field, *v))
+		}
+	}
+	if f.HasAttachment != nil {
+		index = append(index, fp.indexed("hasAttachment", strconv.FormatBool(*f.HasAttachment)))
+	}
 	return func(x emailCtx) bool {
 		m := x.m
 		switch {
@@ -128,6 +161,11 @@ func (fp *filterParser) parse(raw json.RawMessage, depth int) (predicate, *Metho
 			f.Cc != nil && !contains(m.Cc, *f.Cc),
 			f.Subject != nil && !contains([]string{m.Subject}, *f.Subject):
 			return false
+		}
+		for _, p := range index {
+			if !p(m) {
+				return false
+			}
 		}
 		return true
 	}, nil
@@ -249,10 +287,11 @@ type emailQueryPlan struct {
 	collapse        bool
 	threadDependent bool
 	args            []any
+	fp              *filterParser
 }
 
 func planEmailQuery(filter json.RawMessage, sorts []comparator, collapse bool) (emailQueryPlan, *MethodError) {
-	var fp filterParser
+	fp := &filterParser{}
 	match, e := fp.parse(filter, 0)
 	if e != nil {
 		return emailQueryPlan{}, e
@@ -265,7 +304,57 @@ func planEmailQuery(filter json.RawMessage, sorts []comparator, collapse bool) (
 		match: match, order: order, collapse: collapse,
 		threadDependent: collapse || fp.threadDependent || sortThread,
 		args:            []any{"Email", compactJSON(filter), sorts, collapse},
+		fp:              fp,
 	}, nil
+}
+
+// indexed reports whether the query has index-backed conditions.
+func (q *emailQueryPlan) indexed() bool { return len(q.fp.conds) > 0 }
+
+// resolve answers the index-backed conditions before the live metadata
+// read; the generation becomes part of the query state
+// (docs/specs/search.md#jmap-search-behavior).
+func (q *emailQueryPlan) resolve(ctx context.Context, s *Server) *MethodError {
+	if !q.indexed() {
+		return nil
+	}
+	resp, e := s.search(ctx, search.Request{Op: "match", Conditions: q.fp.conds})
+	if e != nil {
+		return e
+	}
+	if len(resp.Matches) != len(q.fp.conds) {
+		return s.fail("search", fmt.Errorf("%d answers for %d conditions", len(resp.Matches), len(q.fp.conds)))
+	}
+	q.fp.hits = make([]map[string]bool, len(resp.Matches))
+	for i, ids := range resp.Matches {
+		q.fp.hits[i] = map[string]bool{}
+		for _, id := range ids {
+			q.fp.hits[i][id] = true
+		}
+	}
+	q.args = append(q.args, resp.Generation)
+	return nil
+}
+
+// search calls the search function; an index that is not ready or lags is
+// a retryable serverUnavailable.
+func (s *Server) search(ctx context.Context, req search.Request) (search.Response, *MethodError) {
+	if s.Searcher == nil {
+		return search.Response{}, methodErr("unsupportedFilter", "text search is not configured")
+	}
+	resp, err := s.Searcher.Search(ctx, req)
+	if err != nil {
+		return resp, s.fail("search", err)
+	}
+	switch resp.Error {
+	case "":
+		return resp, nil
+	case "notReady":
+		return resp, methodErr("serverUnavailable", "the search index is being built; retry later")
+	case "lagging":
+		return resp, methodErr("serverUnavailable", "the search index is behind; retry later")
+	}
+	return resp, s.fail("search", fmt.Errorf("search error %q", resp.Error))
 }
 
 // results evaluates the query over every Email; with collapseThreads only
@@ -315,12 +404,15 @@ func emailQuery(ctx context.Context, c *call) (any, *MethodError) {
 	if e != nil {
 		return nil, e
 	}
+	if e := q.resolve(ctx, c.s); e != nil {
+		return nil, e
+	}
 	emails, st, e := c.s.listEmails(ctx)
 	if e != nil {
 		return nil, e
 	}
 	qs := queryState(st.Epoch, st.Email, q.args...)
-	return page(q.results(emails), a.Position, a.Anchor, a.AnchorOffset, a.Limit, a.CalculateTotal, a.AccountID, qs, true)
+	return page(q.results(emails), a.Position, a.Anchor, a.AnchorOffset, a.Limit, a.CalculateTotal, a.AccountID, qs, !q.indexed())
 }
 
 // emailQueryChanges treats every Email changed since the query state as
@@ -335,6 +427,9 @@ func emailQueryChanges(ctx context.Context, c *call) (any, *MethodError) {
 	q, e := planEmailQuery(a.Filter, a.Sort, a.CollapseThreads)
 	if e != nil {
 		return nil, e
+	}
+	if q.indexed() {
+		return nil, methodErr("cannotCalculateChanges", "text-filtered queries do not support changes")
 	}
 	emails, st, e := c.s.listEmails(ctx)
 	if e != nil {

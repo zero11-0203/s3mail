@@ -45,6 +45,8 @@ func (a *Account) Commit(ctx context.Context, prev model.State, m model.Mutation
 			return model.State{}, model.ErrStateChanged
 		case m.Receipt != nil && reason(tce, 1) == "ConditionalCheckFailed":
 			return model.State{}, model.ErrDuplicateReceipt
+		case m.Search != nil && reason(tce, 1) == "ConditionalCheckFailed":
+			return model.State{}, model.ErrSearchConflict
 		}
 		return model.State{}, fmt.Errorf("commit canceled: %w", err)
 	}
@@ -86,7 +88,8 @@ func (a *Account) del(sk string, cond *string) types.TransactWriteItem {
 }
 
 // build returns the transaction items; STATE is item 0 and the receipt
-// marker, when present, item 1, for cancellation classification.
+// marker or search registration, when present, item 1, for cancellation
+// classification.
 func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effects) []types.TransactWriteItem {
 	state := &types.Update{
 		TableName:        &a.Table,
@@ -111,6 +114,24 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 			"emailId": s(r.EmailID), "bucket": s(r.Blob.Bucket), "key": s(r.Blob.Key), "versionId": s(r.Blob.VersionID),
 			"receivedAt": s(sortTime(r.ReceivedAt)), "seq": n(next.Seq), "parserVersion": n(int64(r.ParserVersion)),
 		}, absent))
+	}
+
+	if r := m.Search; r != nil {
+		cond := aws.String("attribute_not_exists(generation)")
+		var vals map[string]types.AttributeValue
+		if r.Prev != "" {
+			cond = aws.String("generation = :prevGen")
+			vals = map[string]types.AttributeValue{":prevGen": s(r.Prev)}
+		}
+		x := r.Next
+		item := a.key("SEARCH")
+		maps.Copy(item, map[string]types.AttributeValue{
+			"generation": s(x.Generation), "seq": n(x.Seq), "epoch": n(x.Epoch), "key": s(x.Key),
+			"versionId": s(x.VersionID), "etag": s(x.ETag), "publishedAt": s(sortTime(x.PublishedAt)), "registeredSeq": n(next.Seq),
+		})
+		items = append(items, types.TransactWriteItem{Put: &types.Put{
+			TableName: &a.Table, Item: item, ConditionExpression: cond, ExpressionAttributeValues: vals,
+		}})
 	}
 
 	for _, c := range m.Emails {
@@ -170,6 +191,7 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 	}
 
 	change := map[string]types.AttributeValue{
+		"at":        n(a.now().Unix()),
 		"created":   idsByTypeAttr(ef.Change.Created),
 		"updated":   idsByTypeAttr(ef.Change.Updated),
 		"destroyed": idsByTypeAttr(ef.Change.Destroyed),

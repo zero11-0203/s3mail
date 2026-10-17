@@ -281,9 +281,13 @@ func (a *Account) Changes(ctx context.Context, after, upto int64) ([]model.Chang
 			if err != nil {
 				return nil, fmt.Errorf("malformed change key %q", sk)
 			}
-			out = append(out, model.Change{
+			ch := model.Change{
 				Seq: seq, Created: idsByType(it["created"]), Updated: idsByType(it["updated"]), Destroyed: idsByType(it["destroyed"]),
-			})
+			}
+			if at, ok := num(it["at"]); ok {
+				ch.At = time.Unix(at, 0).UTC()
+			}
+			out = append(out, ch)
 		}
 		if len(page.LastEvaluatedKey) == 0 {
 			return out, nil
@@ -430,4 +434,20 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// SearchIndex reads the registered search generation strongly.
+func (a *Account) SearchIndex(ctx context.Context) (model.SearchIndex, bool, error) {
+	out, err := a.DB.GetItem(ctx, &dynamodb.GetItemInput{TableName: &a.Table, Key: a.key("SEARCH"), ConsistentRead: aws.Bool(true)})
+	if err != nil || out.Item == nil {
+		return model.SearchIndex{}, false, err
+	}
+	it := out.Item
+	x := model.SearchIndex{Generation: str(it["generation"]), Key: str(it["key"]), VersionID: str(it["versionId"]), ETag: str(it["etag"])}
+	x.Seq, _ = num(it["seq"])
+	x.Epoch, _ = num(it["epoch"])
+	if t, err := parseSortTime(str(it["publishedAt"])); err == nil {
+		x.PublishedAt = t
+	}
+	return x, true, nil
 }

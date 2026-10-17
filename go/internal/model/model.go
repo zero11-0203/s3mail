@@ -198,6 +198,26 @@ type Change struct {
 	Created   map[string][]string
 	Updated   map[string][]string
 	Destroyed map[string][]string
+	// At is the commit time; the search reader measures index lag by it.
+	At time.Time
+}
+
+// SearchIndex is a published index generation registered in the account
+// (docs/specs/search.md#index-pipeline).
+type SearchIndex struct {
+	Generation  string
+	Seq, Epoch  int64
+	Key         string
+	VersionID   string
+	ETag        string
+	PublishedAt time.Time
+}
+
+// SearchRegistration replaces the registered generation Prev ("" for
+// none) with Next.
+type SearchRegistration struct {
+	Prev string
+	Next SearchIndex
 }
 
 // Upload is an uploaded blob in the disposable blob bucket.
@@ -242,12 +262,17 @@ type Mutation struct {
 	Receipt   *Receipt
 	Uploads   []Upload
 	Events    []Event
+	// Search registers a published index; it advances the Email state so
+	// clients rerun text queries, without making anything search-dirty.
+	Search *SearchRegistration
 }
 
 // Errors returned by stores.
 var (
 	// ErrStateChanged means another commit advanced the account sequence.
 	ErrStateChanged = errors.New("account state changed")
+	// ErrSearchConflict means another generation was registered first.
+	ErrSearchConflict = errors.New("search registration changed")
 	// ErrDuplicateReceipt means the receipt marker already exists.
 	ErrDuplicateReceipt = errors.New("receipt already committed")
 	// ErrTooLarge means the commit exceeds the transaction limits.

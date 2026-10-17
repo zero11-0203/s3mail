@@ -80,6 +80,17 @@ Mail arrives in many languages and character sets.
 - `SearchSnippet/get` returns RFC-defined highlighted strings with message text escaped and only the specified highlight markers inserted; authorization/destruction checks precede extraction. Clients still render snippets as untrusted data.
 - Semantic and hybrid search will be a custom JMAP capability added by the AI agent project.
 
+### Current implementation
+
+What is deployed (`go/internal/search`, `infra/modules/search`) and where it is narrower than the design above:
+
+- **Dispatch:** a scheduled dispatcher (one minute) reads the registration, STATE and the change ledger and sends one SQS wake-up while Emails were created or destroyed after the registered sequence. It does not yet drain the `OUTBOX#…#index` entries; they remain for the outbox dispatcher and history GC. The indexer coalesces wake-ups for a 60-second batching window.
+- **Search-dirty set:** the index holds only immutable per-Email content (headers, visible body text, attachment names, has-attachment), so only created and destroyed Emails are re-indexed. Mailbox, keyword and thread filters always use the live metadata read, never the index.
+- **Field matching:** `text`, `body`, `bcc` and `hasAttachment` use the index. `from`, `to`, `cc` and `subject` use case-insensitive substring matching on the live header projection.
+- **CJK segmentation:** NFKC, case folding and overlapping CJK character bigrams only. Dictionary segmentation (`gse`, `kagome`) and language detection are deferred to keep the Lambda package small; bigram phrase queries already match any CJK word of two or more characters, at some precision cost.
+- **History gaps:** history is not pruned yet, so the rebuild-on-gap path is not implemented; a restore-epoch change or an unusable snapshot triggers a full rebuild from live Emails.
+- **Deletion purge:** destroyed Emails leave the next generation; older versions expire through the lifecycle rule, with no explicit purge yet.
+
 ## Failure handling
 
 A failed CAS discards speculative work and replays from the winner. A publication/registration crash is reconciled from embedded generation metadata. Missing source history triggers a full rebuild; excessive lag returns a retryable failure. Explicit deletion and reader-cache cleanup follow [recovery](../operations/recovery.md#retention-deletion-and-garbage-collection).

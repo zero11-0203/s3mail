@@ -6,7 +6,8 @@
 // Cognito subject mapped to it), PUBLIC_URL (the public API root that
 // session URLs are built from), ORIGINALS_BUCKET (durable MIME for new
 // Emails) and BLOBS_BUCKET (uploads). Each role's policy decides which of
-// the buckets the function can actually use.
+// the buckets the function can actually use. SEARCH_FUNCTION, when set,
+// enables text conditions and SearchSnippet/get through the search function.
 package jmapcmd
 
 import (
@@ -21,10 +22,12 @@ import (
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/zero11-0203/s3mail/go/internal/buildinfo"
 	"github.com/zero11-0203/s3mail/go/internal/jmap"
+	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
 )
 
@@ -59,6 +62,9 @@ func Start(component string, h Handler) {
 	srv := jmap.NewServer(strings.TrimSuffix(env["PUBLIC_URL"], "/"), acct, originals, base)
 	srv.Archive = &store.Archive{S3: s3c, Bucket: env["ORIGINALS_BUCKET"]}
 	srv.Uploads = &store.Uploads{S3: s3c, Bucket: env["BLOBS_BUCKET"]}
+	if fn := os.Getenv("SEARCH_FUNCTION"); fn != "" {
+		srv.Searcher = &searchcmd.LambdaSearcher{Lambda: awslambda.NewFromConfig(cfg), Function: fn}
+	}
 
 	lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
 		// Lambda runs one invocation per environment at a time, so the

@@ -82,3 +82,21 @@ variable "jmap_push_zip" {
   type        = string
   default     = "../../go/build/jmap-push/bootstrap.zip"
 }
+
+variable "search_indexer_zip" {
+  description = "Path to the search-indexer Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/search-indexer/bootstrap.zip"
+}
+
+variable "search_dispatcher_zip" {
+  description = "Path to the search-dispatcher Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/search-dispatcher/bootstrap.zip"
+}
+
+variable "search_zip" {
+  description = "Path to the search Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/search/bootstrap.zip"
+}

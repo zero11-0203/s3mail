@@ -290,3 +290,47 @@ func TestComponentRebuildDerived(t *testing.T) {
 		t.Errorf("thread %s", got.ThreadID)
 	}
 }
+
+func TestComponentSearchRegistration(t *testing.T) {
+	a := localAccount(t)
+	ctx := context.Background()
+	if _, err := a.CommitReceipt(ctx, receipt(1, "Plan", "<p@example.net>", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := a.SearchIndex(ctx); ok || err != nil {
+		t.Fatalf("no registration yet: %v %v", ok, err)
+	}
+	pub := time.Date(2026, 10, 17, 6, 0, 0, 0, time.UTC)
+	reg := func(prev, next string, seq int64) error {
+		st, err := a.State(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = a.Commit(ctx, st, model.Mutation{Search: &model.SearchRegistration{Prev: prev, Next: model.SearchIndex{
+			Generation: next, Seq: seq, Epoch: st.Epoch, Key: "index/x.sqlite", VersionID: "v-" + next, ETag: `"e"`, PublishedAt: pub}}})
+		return err
+	}
+	before, _ := a.State(ctx)
+	if err := reg("", "g1", before.Seq); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, _ := a.SearchIndex(ctx)
+	if !ok || got.Generation != "g1" || got.Seq != before.Seq || got.VersionID != "v-g1" || !got.PublishedAt.Equal(pub) {
+		t.Errorf("registration %+v", got)
+	}
+	if st, _ := a.State(ctx); st.Email != st.Seq || st.Seq != before.Seq+1 {
+		t.Errorf("registration advances Email state: %+v", st)
+	}
+	// A stale writer cannot replace a newer generation, nor create one.
+	for _, prev := range []string{"", "g0"} {
+		if err := reg(prev, "g2", before.Seq); !errors.Is(err, model.ErrSearchConflict) {
+			t.Errorf("prev %q: %v", prev, err)
+		}
+	}
+	if err := reg("g1", "g2", before.Seq+1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := a.SearchIndex(ctx); got.Generation != "g2" {
+		t.Errorf("after CAS %+v", got)
+	}
+}

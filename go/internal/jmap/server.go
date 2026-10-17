@@ -18,7 +18,9 @@ type Server struct {
 	// Archive and Uploads are needed by uploads, import and creation.
 	Archive Archive
 	Uploads Uploads
-	Log     *slog.Logger
+	// Searcher answers text conditions and snippets; nil disables them.
+	Searcher Searcher
+	Log      *slog.Logger
 	// Now overrides the clock (tests).
 	Now func() time.Time
 	// PushPoll overrides PollInterval (tests).
@@ -44,6 +46,7 @@ func NewServer(baseURL string, store Store, originals Originals, log *slog.Logge
 		"Email/query":          {CapMail, ScopeRead, emailQuery},
 		"Email/changes":        {CapMail, ScopeRead, emailChanges},
 		"Email/queryChanges":   {CapMail, ScopeRead, emailQueryChanges},
+		"SearchSnippet/get":    {CapMail, ScopeRead, searchSnippetGet},
 		"Email/set":            {CapMail, ScopeWrite, emailSet},
 		"Email/import":         {CapMail, ScopeWrite, emailImport},
 		"Email/parse":          {CapMail, ScopeRead, emailParse},

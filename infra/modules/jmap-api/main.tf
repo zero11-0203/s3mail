@@ -45,7 +45,7 @@ locals {
       memory      = 1024
       timeout     = 30
       concurrency = null
-      statements = [
+      statements = concat([
         {
           Sid       = "ReadAndUpdateOwnAccountPartition"
           Effect    = "Allow"
@@ -70,7 +70,13 @@ locals {
           Action   = "s3:PutObject"
           Resource = "${aws_s3_bucket.blobs.arn}/uploads/*"
         },
-      ]
+        ], var.search_function_arn == null ? [] : [{
+          # Text conditions and snippets (docs/specs/search.md#index-pipeline).
+          Sid      = "InvokeSearch"
+          Effect   = "Allow"
+          Action   = "lambda:InvokeFunction"
+          Resource = var.search_function_arn
+      }])
     }
     # Blob downloads: read-only.
     download = {
@@ -179,14 +185,14 @@ resource "aws_lambda_function" "fn" {
   publish                        = true
 
   environment {
-    variables = {
+    variables = merge({
       TABLE            = var.table_name
       ACCOUNT_ID       = var.account_id
       OWNER_SUB        = var.owner_subject
       PUBLIC_URL       = local.base_url
       ORIGINALS_BUCKET = var.originals_bucket_name
       BLOBS_BUCKET     = aws_s3_bucket.blobs.id
-    }
+    }, each.key == "api" && var.search_function_arn != null ? { SEARCH_FUNCTION = var.search_function_arn } : {})
   }
 
   logging_config {

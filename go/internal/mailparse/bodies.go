@@ -117,6 +117,16 @@ var (
 	spacePattern = regexp.MustCompile(`\s+`)
 )
 
+// VisibleText returns a text part's decoded text, truncated to maxBytes
+// before tag removal; HTML loses its tags, scripts and styles.
+func (p *Part) VisibleText(maxBytes int) string {
+	s := p.Value(maxBytes).Value
+	if p.Type == "text/html" {
+		s = html.UnescapeString(tagPattern.ReplaceAllString(s, " "))
+	}
+	return s
+}
+
 // Preview returns up to 256 characters of plain text from the first
 // textBody part that has any, for list display (RFC 8621 §4.1.4).
 func (m *Message) Preview(b Bodies) string {
@@ -124,10 +134,7 @@ func (m *Message) Preview(b Bodies) string {
 		if !strings.HasPrefix(p.Type, "text/") {
 			continue
 		}
-		s := p.Value(64 << 10).Value
-		if p.Type == "text/html" {
-			s = html.UnescapeString(tagPattern.ReplaceAllString(s, " "))
-		}
+		s := p.VisibleText(64 << 10)
 		s = strings.TrimSpace(spacePattern.ReplaceAllString(s, " "))
 		if s == "" {
 			continue

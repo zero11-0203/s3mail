@@ -127,11 +127,12 @@ func Plan(m Mutation, d Derived) Effects {
 			}
 			ef.SearchDirty = append(ef.SearchDirty, c.Before.ID)
 		case c.Before != nil:
+			// Indexed content is immutable; mailbox and keyword filters
+			// use live metadata (docs/specs/search.md#index-pipeline).
 			note(ef.Change.Updated, "Email", c.After.ID)
-			ef.SearchDirty = append(ef.SearchDirty, c.After.ID)
 		}
 	}
-	ef.Email = len(m.Emails) > 0
+	ef.Email = len(m.Emails) > 0 || m.Search != nil
 
 	keys := make([]MBThreadKey, 0, len(delta))
 	for k := range delta {
