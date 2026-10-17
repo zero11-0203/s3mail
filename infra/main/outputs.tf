@@ -46,7 +46,6 @@ output "mail_outbound" {
     relay_parameter  = module.mail_outbound.relay_parameter
     webhook_url      = module.jmap_api.webhook_url
     webhook_secret   = module.mail_outbound.webhook_secret_arn
-    api_secret       = module.mail_outbound.api_secret_arn
     delivery_dlq_arn = module.mail_outbound.delivery_dlq_arn
     submit_dlq_arn   = module.mail_outbound.submit_dlq_arn
     function_names   = module.mail_outbound.function_names

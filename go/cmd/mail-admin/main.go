@@ -5,9 +5,6 @@
 //	mail-admin -table NAME submissions
 //	mail-admin -table NAME submission ID
 //	mail-admin -table NAME resolve ID accepted|rejected|retry
-//	mail-admin suppressions
-//	mail-admin unsuppress ADDRESS
-//	mail-admin -table NAME relay-usage
 //
 // rebuild-derived recomputes listing, thread-membership, threading-index,
 // summary and counter records from the stored Emails in one guarded
@@ -18,12 +15,6 @@
 // acceptance-unknown submission after checking the relay: retry
 // explicitly authorizes a new attempt
 // (docs/specs/mail-flow.md#outbound-email).
-//
-// suppressions lists the addresses SMTP2GO refuses to send to after hard
-// bounces, complaints or manual blocks; unsuppress clears every reason
-// for one address. relay-usage compares SMTP2GO's plan cycle with the
-// quota counters s3mail reserves. They call the SMTP2GO API with the key
-// in the -api-secret secret, set out of band.
 package main
 
 import (
@@ -36,13 +27,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 
 	"github.com/zero11-0203/s3mail/go/internal/model"
-	"github.com/zero11-0203/s3mail/go/internal/relay/smtp2go"
 	"github.com/zero11-0203/s3mail/go/internal/send"
 	"github.com/zero11-0203/s3mail/go/internal/store"
 )
@@ -50,11 +38,9 @@ import (
 func main() {
 	table := flag.String("table", "", "mail table name")
 	account := flag.String("account", "primary", "internal account id")
-	apiSecret := flag.String("api-secret", "s3mail/relay/smtp2go-api", "Secrets Manager secret holding the SMTP2GO API key")
 	flag.Parse()
-	if flag.NArg() < 1 || (*table == "" && flag.Arg(0) != "suppressions" && flag.Arg(0) != "unsuppress") {
-		fmt.Fprintln(os.Stderr, "usage: mail-admin -table NAME [-account ID] rebuild-derived | submissions | submission ID | resolve ID accepted|rejected|retry | relay-usage")
-		fmt.Fprintln(os.Stderr, "       mail-admin [-api-secret ID] suppressions | unsuppress ADDRESS")
+	if *table == "" || flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: mail-admin -table NAME [-account ID] rebuild-derived | submissions | submission ID | resolve ID accepted|rejected|retry")
 		os.Exit(2)
 	}
 	ctx := context.Background()
@@ -63,62 +49,7 @@ func main() {
 		fail(err)
 	}
 	a := &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: *table, AccountID: *account}
-	api := func() *smtp2go.API {
-		v, err := secretsmanager.NewFromConfig(cfg).GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: apiSecret})
-		if err != nil {
-			fail(fmt.Errorf("read the SMTP2GO API key: %w", err))
-		}
-		return &smtp2go.API{Key: strings.TrimSpace(aws.ToString(v.SecretString))}
-	}
 	switch flag.Arg(0) {
-	case "suppressions":
-		list, err := api().Suppressions(ctx)
-		if err != nil {
-			fail(err)
-		}
-		for _, x := range list {
-			fmt.Printf("%s  %-11s %s  %s\n", x.Address, x.Reason, x.Timestamp, x.Description)
-		}
-		fmt.Printf("%d suppressed\n", len(list))
-	case "unsuppress":
-		if flag.NArg() != 2 {
-			fail(fmt.Errorf("usage: unsuppress ADDRESS"))
-		}
-		c := api()
-		list, err := c.Suppressions(ctx)
-		if err != nil {
-			fail(err)
-		}
-		var reasons []string
-		for _, x := range list {
-			if strings.EqualFold(x.Address, flag.Arg(1)) && !slices.Contains(reasons, x.Reason) {
-				reasons = append(reasons, x.Reason)
-			}
-		}
-		if len(reasons) == 0 {
-			fail(fmt.Errorf("%s is not suppressed", flag.Arg(1)))
-		}
-		removed, err := c.Unsuppress(ctx, flag.Arg(1), reasons)
-		if err != nil {
-			fail(err)
-		}
-		for _, r := range removed {
-			fmt.Printf("%s %s removed=%v\n", r.Address, r.Reason, r.Removed)
-		}
-	case "relay-usage":
-		cycle, err := api().EmailCycle(ctx)
-		if err != nil {
-			fail(err)
-		}
-		fmt.Printf("smtp2go cycle %s to %s: %d of %d used, %d remaining\n", cycle.Start, cycle.End, cycle.Used, cycle.Max, cycle.Remaining)
-		now := time.Now().UTC()
-		for _, k := range []string{"smtp2go#day#" + now.Format("2006-01-02"), "smtp2go#month#" + now.Format("2006-01")} {
-			used, err := a.QuotaUsed(ctx, k)
-			if err != nil {
-				fail(err)
-			}
-			fmt.Printf("s3mail %s: %d reserved\n", k, used)
-		}
 	case "rebuild-derived":
 		st, err := a.RebuildDerived(ctx)
 		if err != nil {
