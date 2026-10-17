@@ -7,12 +7,15 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 
 	"github.com/zero11-0203/s3mail/go/internal/auth"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -29,7 +32,11 @@ func main() {
 	a := &auth.Authorizer{Verifier: &auth.Verifier{
 		Issuer:    issuer,
 		ClientIDs: clients,
-		Keys:      &auth.JWKS{URL: issuer + "/.well-known/jwks.json"},
+		Keys: &auth.JWKS{
+			URL:    issuer + "/.well-known/jwks.json",
+			Client: &http.Client{Timeout: 5 * time.Second, Transport: telemetry.HTTP(nil)},
+		},
 	}}
-	lambda.Start(a.Handle)
+	telemetry.Init()
+	lambda.Start(telemetry.Handler(a.Handle))
 }

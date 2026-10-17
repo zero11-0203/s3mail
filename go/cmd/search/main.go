@@ -17,6 +17,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/search"
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -29,11 +30,11 @@ func main() {
 		Dir:     os.TempDir(),
 		Log:     log,
 	}
-	lambda.Start(func(ctx context.Context, req search.Request) (search.Response, error) {
+	lambda.Start(telemetry.Handler(func(ctx context.Context, req search.Request) (search.Response, error) {
 		resp, err := r.Serve(ctx, req)
 		if err != nil {
 			log.Error("search", "op", req.Op, "error", err)
 		}
 		return resp, err
-	})
+	}))
 }

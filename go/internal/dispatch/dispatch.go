@@ -16,6 +16,7 @@ import (
 
 	"github.com/zero11-0203/s3mail/go/internal/search"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 // Outbox reads and acknowledges entries.
@@ -66,19 +67,26 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 	// its own cursor.
 	var index []store.OutboxEntry
 	var top int64
+	var topTrace string
 	for _, e := range entries {
 		switch e.Destination {
 		case "index":
 			index = append(index, e)
-			top = max(top, entrySeq(e.Key))
+			if s := entrySeq(e.Key); s >= top {
+				top, topTrace = s, e.Trace
+			}
 		case "submit":
+			// The wake-up continues the trace of the request that
+			// committed the submission.
+			sctx, span := telemetry.Resume(ctx, e.Trace, "dispatch submit")
 			ok := true
 			for _, id := range e.IDs {
-				if err := d.Submit.Enqueue(ctx, id, 0); err != nil {
+				if err := d.Submit.Enqueue(sctx, id, 0); err != nil {
 					errs = append(errs, err)
 					ok = false
 				}
 			}
+			span.End()
 			if ok {
 				ack(e)
 			}
@@ -91,7 +99,11 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 		}
 	}
 	if len(index) > 0 {
-		if err := d.Waker.Wake(ctx, top); err != nil {
+		// One wake-up covers them all; it continues the newest trace.
+		wctx, span := telemetry.Resume(ctx, topTrace, "dispatch index")
+		err := d.Waker.Wake(wctx, top)
+		span.End()
+		if err != nil {
 			errs = append(errs, err)
 		} else {
 			for _, e := range index {

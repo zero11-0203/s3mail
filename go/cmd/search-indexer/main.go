@@ -19,6 +19,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/search"
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -34,7 +35,7 @@ func main() {
 		Key:       searchcmd.IndexKey(env["ACCOUNT_ID"]),
 		Dir:       os.TempDir(),
 	}
-	lambda.Start(func(ctx context.Context, ev events.SQSEvent) error {
+	lambda.Start(telemetry.Func(func(ctx context.Context, ev events.SQSEvent) error {
 		inv := ix
 		inv.Log = base
 		if lc, ok := lambdacontext.FromContext(ctx); ok {
@@ -44,5 +45,5 @@ func main() {
 		// The wake-ups only say "look"; a failure returns the whole batch
 		// for redelivery and the next run replays from the published cursor.
 		return inv.Run(ctx)
-	})
+	}))
 }

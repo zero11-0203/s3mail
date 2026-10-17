@@ -19,6 +19,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/send"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 	log := searchcmd.Logger("delivery-worker")
 	cfg := searchcmd.Config()
 	acct := &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]}
-	lambda.Start(func(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
+	lambda.Start(telemetry.Handler(func(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
 		var resp events.SQSEventResponse
 		for _, r := range ev.Records {
 			reports, err := smtp2go.Parse([]byte(r.Body))
@@ -55,5 +56,5 @@ func main() {
 			}
 		}
 		return resp, nil
-	})
+	}))
 }

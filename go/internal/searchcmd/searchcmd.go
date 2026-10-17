@@ -20,6 +20,7 @@ import (
 
 	"github.com/zero11-0203/s3mail/go/internal/buildinfo"
 	"github.com/zero11-0203/s3mail/go/internal/search"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 // Env reads the required environment variables or exits.
@@ -41,12 +42,16 @@ func Logger(component string) *slog.Logger {
 		With("component", component, "version", buildinfo.Version)
 }
 
-// Config loads the AWS configuration or exits.
+// Config installs tracing and loads the AWS configuration, with a client
+// span on every call (docs/operations/monitoring.md#tracing-x-ray), or
+// exits.
 func Config() aws.Config {
+	telemetry.Init()
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
+	telemetry.AWS(&cfg)
 	return cfg
 }
 

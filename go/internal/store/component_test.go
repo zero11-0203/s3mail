@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"go.opentelemetry.io/contrib/propagators/aws/xray"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/zero11-0203/s3mail/go/internal/ingest"
 	"github.com/zero11-0203/s3mail/go/internal/model"
@@ -358,7 +362,13 @@ func TestComponentSubmissionRecords(t *testing.T) {
 		SendAt: time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC), Status: model.SubmissionQueued, Reservation: model.Reservation{Units: 2, Keys: []string{"smtp2go#day#2026-10-17"}}}
 	sub.SetRecipients("queued", "250 2.0.0 queued")
 	quota := []model.QuotaDelta{{Key: "smtp2go#day#2026-10-17", Units: 2, Limit: 3}}
-	st, err := commit(model.Mutation{Submissions: []model.SubmissionChange{{After: &sub}}, Quota: quota, Send: []string{"Sa"},
+	// The committing request is traced; its header rides on the outbox.
+	otel.SetTextMapPropagator(xray.Propagator{})
+	tctx := trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{0x5f, 1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled,
+	}))
+	prev, _ := a.State(ctx)
+	st, err := a.Commit(tctx, prev, model.Mutation{Submissions: []model.SubmissionChange{{After: &sub}}, Quota: quota, Send: []string{"Sa"},
 		Attempts: []model.Attempt{{SubmissionID: "Sa", Attempt: 0, Phase: "created", At: sub.SendAt}}})
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +403,7 @@ func TestComponentSubmissionRecords(t *testing.T) {
 			submit = append(submit, e)
 		}
 	}
-	if len(submit) != 1 || submit[0].IDs[0] != "Sa" {
+	if len(submit) != 1 || submit[0].IDs[0] != "Sa" || !strings.HasPrefix(submit[0].Trace, "Root=1-5f010000-") {
 		t.Fatalf("outbox %+v", ob)
 	}
 	if err := a.AckOutbox(ctx, submit[0].Key); err != nil {

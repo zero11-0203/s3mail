@@ -18,6 +18,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/sendcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -31,7 +32,7 @@ func main() {
 		Waker:  &searchcmd.SQSWaker{SQS: q, QueueURL: env["INDEX_QUEUE_URL"]},
 		Submit: &sendcmd.Queue{SQS: q, QueueURL: env["SUBMIT_QUEUE_URL"]},
 	}
-	lambda.Start(func(ctx context.Context, event json.RawMessage) error {
+	lambda.Start(telemetry.Func(func(ctx context.Context, event json.RawMessage) error {
 		// Stream batches carry only keys; the drain reads the outbox
 		// itself, so records are not inspected. A failed drain fails the
 		// batch and the stream retries it.
@@ -49,5 +50,5 @@ func main() {
 			log.Error("dispatch", "error", err)
 		}
 		return err
-	})
+	}))
 }

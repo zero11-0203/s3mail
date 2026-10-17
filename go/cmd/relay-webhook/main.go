@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 	"github.com/zero11-0203/s3mail/go/internal/webhook"
 )
 
@@ -62,7 +63,7 @@ func main() {
 		},
 		Log: log,
 	}
-	lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	lambda.Start(telemetry.Handler(func(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 		return r.Handle(ctx, req), nil
-	})
+	}))
 }

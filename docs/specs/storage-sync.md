@@ -74,7 +74,7 @@ The mail table uses `PK = ACCOUNT#<internalAccountId>` and typed sort keys. This
 | `CHANGE#<padded-sequence>` | Ordered durable record of changed object IDs/types, destruction and search-dirty IDs; one record per commit |
 | `VERSION#type#id#<padded-sequence>` | Retained metadata versions for supported historical query evaluation; same history floor as changes |
 | `RECEIPT#sesMessageId`, `DELETED#emailId` | Minimal durable ingestion/replay and deletion markers, independent of visible email lifetime |
-| `OUTBOX#<padded-sequence>#destination` | Pending queue/event publication, committed with the source mutation |
+| `OUTBOX#<padded-sequence>#destination` | Pending queue/event publication, committed with the source mutation; `trace` holds the committing request's X-Ray header, when traced, so dispatch continues its trace |
 | `SEARCH` | Registered search-index generation: id, source sequence, epoch, object key, version and ETag; replaced only by a commit naming the previous generation ([search](search.md#index-pipeline)) |
 | `BLOB#id`, `ATTEMPT#id`, `QUOTA#relay#period` | Blob ownership/reference state, send recovery and atomic quota reservations |
 | `RELAYID#relay#queueId`, `EVENT#relay#eventId` | Delivery-report correlation from the relay's queue id to its submission, and the deduplication marker of each applied report ([webhook idempotency](mail-flow.md#webhook-idempotency)) |

@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -18,6 +19,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/send"
 	"github.com/zero11-0203/s3mail/go/internal/sendcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -30,11 +32,11 @@ func main() {
 		Queue:  &sendcmd.Queue{SQS: sqs.NewFromConfig(cfg), QueueURL: env["QUEUE_URL"]},
 		Log:    log,
 	}
-	lambda.Start(func(ctx context.Context) error {
+	lambda.Start(telemetry.Func(func(ctx context.Context, _ json.RawMessage) error {
 		if err := r.Run(ctx); err != nil {
 			log.Error("recovery", "error", err)
 			return err
 		}
 		return nil
-	})
+	}))
 }

@@ -13,6 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 // SMTP is the authenticated SMTP submission adapter (SMTP2GO initially).
@@ -75,8 +82,31 @@ func (r *SMTP) tlsConfig() *tls.Config {
 	return cfg
 }
 
-// Submit runs one SMTP transaction.
+// Submit runs one SMTP transaction in a client span naming the relay
+// host, the stage reached and the outcome; replies and addresses are not
+// recorded.
 func (r *SMTP) Submit(ctx context.Context, m Message) Result {
+	ctx, span := telemetry.Tracer("relay").Start(ctx, "SMTP submit", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("peer.service", r.Host),
+			semconv.ServerAddress(r.Host),
+			semconv.ServerPort(r.Port),
+			semconv.NetworkProtocolName("smtp"),
+			attribute.Int("smtp.recipients", len(m.Envelope.RcptTo)),
+		))
+	defer span.End()
+	res := r.submit(ctx, m)
+	span.SetAttributes(attribute.String("smtp.stage", res.Stage), attribute.String("smtp.outcome", res.Outcome.String()))
+	if res.RelayID != "" {
+		span.SetAttributes(attribute.String("relay.message_id", res.RelayID))
+	}
+	if res.Outcome != Accepted {
+		span.SetStatus(codes.Error, res.Outcome.String()+" at "+res.Stage)
+	}
+	return res
+}
+
+func (r *SMTP) submit(ctx context.Context, m Message) Result {
 	timeout := r.Timeout
 	if timeout == 0 {
 		timeout = 60 * time.Second

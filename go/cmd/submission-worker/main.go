@@ -23,6 +23,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/send"
 	"github.com/zero11-0203/s3mail/go/internal/sendcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 func main() {
@@ -46,7 +47,7 @@ func main() {
 		Queue: &sendcmd.Queue{SQS: sqs.NewFromConfig(cfg), QueueURL: env["QUEUE_URL"]},
 		Log:   log,
 	}
-	lambda.Start(func(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
+	lambda.Start(telemetry.Handler(func(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
 		var resp events.SQSEventResponse
 		for _, r := range ev.Records {
 			var m sendcmd.Message
@@ -60,5 +61,5 @@ func main() {
 			}
 		}
 		return resp, nil
-	})
+	}))
 }

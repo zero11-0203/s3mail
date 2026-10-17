@@ -16,6 +16,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // server is a scripted SMTP server.
@@ -197,6 +202,30 @@ func TestSMTPAccepted(t *testing.T) {
 		if implicit == s.saw("STARTTLS") {
 			t.Errorf("implicit=%v STARTTLS use", implicit)
 		}
+	}
+}
+
+// TestSMTPSpan checks the relay's client span: host, stage, outcome and
+// relay id, but no addresses, replies or content.
+func TestSMTPSpan(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	defer otel.SetTracerProvider(prev)
+	_ = run(t, &server{}, msg, nil)
+	spans := rec.Ended()
+	if len(spans) != 1 || spans[0].SpanKind() != trace.SpanKindClient {
+		t.Fatalf("spans %v", spans)
+	}
+	got := map[string]string{}
+	for _, kv := range spans[0].Attributes() {
+		got[string(kv.Key)] = kv.Value.String()
+		if strings.Contains(kv.Value.String(), "@") || strings.Contains(kv.Value.String(), "250") {
+			t.Errorf("%s=%s", kv.Key, kv.Value.String())
+		}
+	}
+	if got["peer.service"] != "relay.example.com" || got["smtp.outcome"] != Accepted.String() || got["relay.message_id"] != "1abcde-000001-AB" || got["smtp.recipients"] != "2" {
+		t.Errorf("attributes %v", got)
 	}
 }
 

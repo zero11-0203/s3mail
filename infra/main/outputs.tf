@@ -52,10 +52,7 @@ output "mail_outbound" {
   }
 }
 
-output "ops" {
-  description = "The monitoring dashboard and its alarms."
-  value = {
-    dashboard_url = module.ops.dashboard_url
-    alarm_names   = module.ops.alarm_names
-  }
+output "dashboard_url" {
+  description = "The CloudWatch operations dashboard."
+  value       = module.ops.dashboard_url
 }

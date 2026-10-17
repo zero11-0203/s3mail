@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/zero11-0203/s3mail/go/internal/model"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 // maxTransactItems is DynamoDB's TransactWriteItems limit.
@@ -34,6 +35,15 @@ func (a *Account) Commit(ctx context.Context, prev model.State, m model.Mutation
 	ef := model.Plan(m, d)
 	next := ef.Next(prev)
 	items := a.build(prev, next, m, ef)
+	if h := telemetry.Header(ctx); h != "" {
+		// The committing request's trace continues through dispatch
+		// (docs/operations/monitoring.md#tracing-x-ray).
+		for _, it := range items {
+			if it.Put != nil && strings.HasPrefix(str(it.Put.Item["SK"]), "OUTBOX#") {
+				it.Put.Item["trace"] = s(h)
+			}
+		}
+	}
 	if len(items) > maxTransactItems {
 		return model.State{}, model.ErrTooLarge
 	}

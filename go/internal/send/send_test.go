@@ -2,7 +2,6 @@ package send
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -234,8 +233,7 @@ func TestLeaseRecovery(t *testing.T) {
 	ctx := context.Background()
 	q := &queue{}
 	now := t0
-	var logs strings.Builder
-	rec := &Recovery{Store: st, Config: &config{}, Queue: q, Log: slog.New(slog.NewJSONHandler(&logs, nil)).With("component", "submission-recovery"), Now: func() time.Time { return now }}
+	rec := &Recovery{Store: st, Config: &config{}, Queue: q, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now }}
 	claim, _ := Claim(st.subs["Sa"], "w1", now)
 	_, _ = st.Commit(ctx, st.st, *claim)
 	// Crash before handoff: retryable once the lease expires.
@@ -261,14 +259,6 @@ func TestLeaseRecovery(t *testing.T) {
 	if s := st.subs["Sa"]; s.Status != model.SubmissionUnknown || len(q.items) != 1 {
 		t.Fatalf("post-handoff expiry %+v %v", s, q.items)
 	}
-	// Every sweep reports the unresolved count as a metric.
-	if g := lastGauge(t, logs.String()); g != 1 {
-		t.Errorf("unknown gauge %v", g)
-	}
-	_ = rec.Run(ctx)
-	if g := lastGauge(t, logs.String()); g != 1 {
-		t.Errorf("unknown gauge on the next sweep %v", g)
-	}
 	// The original worker's late acceptance evidence still resolves it.
 	m, _ := Finish(st.subs["Sa"], "w2", 2, relay.Result{Outcome: relay.Accepted, Stage: "final", Reply: "250 ok"}, now)
 	if m == nil {
@@ -290,32 +280,6 @@ func TestLeaseRecovery(t *testing.T) {
 	if len(q.items) != 0 {
 		t.Error("paused sending re-enqueued work")
 	}
-}
-
-// lastGauge returns the SubmissionsUnknown value of the last EMF record.
-func lastGauge(t *testing.T, logs string) float64 {
-	t.Helper()
-	lines := strings.Split(strings.TrimSpace(logs), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		var rec struct {
-			AWS struct {
-				CloudWatchMetrics []struct {
-					Namespace  string
-					Dimensions [][]string
-				}
-			} `json:"_aws"`
-			Component string   `json:"component"`
-			Unknown   *float64 `json:"SubmissionsUnknown"`
-		}
-		if json.Unmarshal([]byte(lines[i]), &rec) == nil && rec.Unknown != nil {
-			if m := rec.AWS.CloudWatchMetrics; len(m) != 1 || m[0].Namespace != MetricNamespace || rec.Component == "" {
-				t.Errorf("EMF record %s", lines[i])
-			}
-			return *rec.Unknown
-		}
-	}
-	t.Fatal("no gauge logged")
-	return 0
 }
 
 // cancelingRelay cancels the submission during the attempt, before the

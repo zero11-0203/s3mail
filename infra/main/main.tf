@@ -122,15 +122,13 @@ module "mail_outbound" {
   index_queue_arn      = module.search.index_queue_arn
 }
 
-# Alarms and the dashboard; no notification channel is configured.
+# The operations dashboard; no alarms or custom metrics, to avoid their cost.
 module "ops" {
   source = "../modules/ops"
 
   queues = {
-    # A receipt is ingested within seconds; an older one is being retried.
-    ingest = { arn = module.mail_inbound.ingest_queue_arn, max_age_seconds = 900 }
-    # Index lag beyond six minutes (docs/specs/search.md).
-    index           = { arn = module.search.index_queue_arn, max_age_seconds = 360 }
+    ingest          = { arn = module.mail_inbound.ingest_queue_arn }
+    index           = { arn = module.search.index_queue_arn }
     submit          = { arn = module.mail_outbound.submit_queue_arn }
     delivery        = { arn = module.mail_outbound.delivery_queue_arn }
     ingest-dlq      = { arn = module.mail_inbound.ingest_dlq_arn, dead_letter = true }

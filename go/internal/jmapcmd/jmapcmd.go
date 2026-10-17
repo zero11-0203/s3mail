@@ -15,6 +15,7 @@ package jmapcmd
 
 import (
 	"context"
+	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
 	"github.com/zero11-0203/s3mail/go/internal/sendcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
+	"github.com/zero11-0203/s3mail/go/internal/telemetry"
 )
 
 // Handler is one of the jmap.Server HTTP handlers.
@@ -55,9 +57,15 @@ func Start(component string, h Handler) {
 	base := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})).
 		With("component", component, "version", buildinfo.Version)
 
+	telemetry.Init()
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatal(err)
+	}
+	// The push stream polls the account state every three seconds; one
+	// span per connection is enough there (docs/operations/monitoring.md#tracing-x-ray).
+	if component != "jmap-push" {
+		telemetry.AWS(&cfg)
 	}
 	acct := &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]}
 	s3c := s3.NewFromConfig(cfg)
@@ -86,7 +94,7 @@ func Start(component string, h Handler) {
 		srv.Sending = sd
 	}
 
-	lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
+	lambda.Start(telemetry.Streaming(func(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
 		// Lambda runs one invocation per environment at a time, so the
 		// per-request logger can live on the shared server.
 		srv.Log = base
@@ -94,5 +102,5 @@ func Start(component string, h Handler) {
 			srv.Log = base.With("requestId", lc.AwsRequestID)
 		}
 		return h(srv, ctx, req, owners)
-	})
+	}, func(r *events.APIGatewayProxyStreamingResponse) *io.Reader { return &r.Body }))
 }

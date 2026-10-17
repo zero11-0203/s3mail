@@ -14,6 +14,7 @@ type OutboxEntry struct {
 	Key         string // the sort key, used to acknowledge it
 	Destination string // index, submit or events
 	IDs         []string
+	Trace       string // X-Ray header of the committing request, or ""
 }
 
 // Outbox reads every pending entry in commit order.
@@ -21,7 +22,7 @@ func (a *Account) Outbox(ctx context.Context) ([]OutboxEntry, error) {
 	var out []OutboxEntry
 	err := a.queryPrefix(ctx, "OUTBOX#", nil, nil, func(it map[string]types.AttributeValue) error {
 		sk := str(it["SK"])
-		e := OutboxEntry{Key: sk, Destination: sk[strings.LastIndex(sk, "#")+1:]}
+		e := OutboxEntry{Key: sk, Destination: sk[strings.LastIndex(sk, "#")+1:], Trace: str(it["trace"])}
 		switch e.Destination {
 		case "index":
 			e.IDs = strList(it["emailIds"])
