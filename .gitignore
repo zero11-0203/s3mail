@@ -61,6 +61,10 @@ infra/backend.hcl
 node_modules/
 .next/
 
+# Local Claude Code worktrees: nested checkouts that git add would stage
+# as gitlinks
+.claude/worktrees/
+
 # Editors and OS
 .DS_Store
 .idea/
