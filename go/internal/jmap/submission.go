@@ -287,7 +287,7 @@ func submissionQueryChanges(ctx context.Context, c *call) (any, *MethodError) {
 	}
 	args := []any{compactJSON(a.Filter), a.Sort}
 	since, ok := parseQueryState(a.SinceQueryState, st, args...)
-	if !ok {
+	if !ok || !retained(since, st, "EmailSubmission") {
 		return nil, methodErr("cannotCalculateChanges", "unknown query state, or different query arguments")
 	}
 	ids, e := submissionResults(all, a.Filter, a.Sort)

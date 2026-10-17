@@ -88,8 +88,8 @@ What is deployed (`go/internal/search`, `infra/modules/search`) and where it is 
 - **Search-dirty set:** the index holds only immutable per-Email content (headers, visible body text, attachment names, has-attachment), so only created and destroyed Emails are re-indexed. Mailbox, keyword and thread filters always use the live metadata read, never the index.
 - **Field matching:** `text`, `body`, `bcc` and `hasAttachment` use the index. `from`, `to`, `cc` and `subject` use case-insensitive substring matching on the live header projection.
 - **CJK segmentation:** NFKC, case folding and overlapping CJK character bigrams only. Dictionary segmentation (`gse`, `kagome`) and language detection are deferred to keep the Lambda package small; bigram phrase queries already match any CJK word of two or more characters, at some precision cost.
-- **History gaps:** history is not pruned yet, so the rebuild-on-gap path is not implemented; a restore-epoch change or an unusable snapshot triggers a full rebuild from live Emails.
-- **Deletion purge:** destroyed Emails leave the next generation; older versions expire through the lifecycle rule, with no explicit purge yet.
+- **History gaps:** the daily collector never moves the history floor past the registered generation's source sequence, so the indexer and readers never meet a gap and the rebuild-on-gap path is not implemented; a restore-epoch change or an unusable snapshot triggers a full rebuild from live Emails.
+- **Deletion purge:** destroyed Emails leave the next generation. When an Email destroyed within the last eight days is covered by the registered generation, the daily collector (`go/internal/gc`) deletes every older version of the index object, including the three the lifecycle rule protects; the registered and newer versions stay. A search reader removes its previous local copy when it swaps generations.
 
 ## Failure handling
 

@@ -31,7 +31,7 @@ Use unique keys and exact version references for originals rather than overwriti
 | Original raw/durable MIME and its S3 versions | Permanent retention under the policy above; mailbox deletion never deletes these objects |
 | Live mailbox state | Keep until owner deletion; destroying an Email removes it from the active mailbox, not from the original archive |
 | Trash/Junk/Quarantine | Keep visible until explicit owner deletion initially; review quarantine/DLQ alarms rather than auto-discarding accepted mail |
-| JMAP ID-only change history and object tombstones | Follow the [history window, floor and consumer checkpoint contract](../specs/storage-sync.md#dynamodb-storage-and-consistency-contract); pending durable work is retained separately |
+| JMAP ID-only change history and object tombstones | Follow the [history window, floor and consumer checkpoint contract](../specs/storage-sync.md#dynamodb-storage-and-consistency-contract); the [daily collector](#derived-data-collector) deletes records older than 30 days; pending durable work is retained separately |
 | Ingestion receipt/deletion markers | Minimal replay guards for the account lifetime; retain source identity/version references and deletion generation without message bodies or address projections |
 | Temporary unattached uploads | Expire after 24 hours in the disposable bucket; the table TTL removes their `BLOB#` records a day later; before accepting an import, promote its complete durable MIME to the original bucket |
 | Destroyed Email's derived data | Deny access immediately; remove unreferenced extracted attachments/body projections, residual search text and sensitive historical metadata within seven days; original MIME remains permanently |
@@ -45,6 +45,18 @@ Email destruction commits a content-free deletion marker and cleanup outbox work
 GC uses transactional reference counts/pins and a `deleting` claim for **disposable data only**. It may remove all versions of an eligible derived object, never versions in the original bucket. Imports/submissions cannot pin a disposable blob after that claim; they retry from a current snapshot or report an unavailable reference. Active send pins delay derived cleanup until resolution, with the exception reported to the owner. They do not affect the permanent retention of original MIME. Remove sensitive retained metadata projections within seven days, invalidating affected historical query snapshots when necessary; retain content-free sync/deletion evidence. This can shorten historical query availability without erasing the archive.
 
 Publish a clean search snapshot from live Emails through the normal fence, then purge superseded snapshots containing destroyed Emails; do not rely on SQLite free-page deletion to remove text. Reader caches reject deleted snippets immediately and discard contaminated files within seven days. Rebuilds must start from live metadata and deletion evidence, not indiscriminately index every archived original. Parsed data, indexes and temporary uploads use separate storage/lifecycle policies from originals.
+
+<a id="derived-data-collector"></a>
+### Derived-data collector
+
+What is deployed (`go/internal/gc`, `infra/modules/maintenance`): the `s3mail-gc` Lambda runs daily at 03:30 UTC, one at a time, with no access to the original-mail or blob buckets.
+
+- **History:** it advances the history floor on `STATE` to the newest change older than 30 days, never past the registered search generation's source sequence, under the sequence guard. A later run, at least an hour after the floor moved, deletes the CHANGE records at or below it, so a read that saw the previous floor still finds its records. JMAP answers `cannotCalculateChanges` for a state below the floor whose type changed since. Without a registered index, history is kept.
+- **Search snapshots:** after an Email destroyed within the last eight days is covered by the registered generation, it deletes every older version of the index object ([search](../specs/search.md#current-implementation)).
+- **Uploads and markers:** need no collector: the blob bucket expires `uploads/` after a day, and the table TTL removes `BLOB#` records and delivery-report markers.
+- **Nothing else is stored:** destroying an Email already removes its listing, thread, lookup and counter records in the same commit; there are no extracted attachments, body projections or historical metadata versions to collect.
+- **Pause:** set `enabled = false` on the `maintenance` module, or disable the `s3mail-gc` EventBridge rule, before a rebuild ([runbook step 1](#restore-runbook)).
+- **Visibility:** its errors appear on the dashboard and each run logs the counts it deleted; there is no alarm by the owner's choice.
 
 <a id="backup-and-export"></a>
 ### Recovery without backups
@@ -67,7 +79,7 @@ When metadata remains intact, rebuild disposable parsed data, counters/listings 
 5. Treat active or uncertain sends as unresolved. Retained frozen MIME is not authorization to send again. Never dispatch reconstructed submission/outbox work or retry historical sends automatically; reconcile surviving attempt records with relay evidence and require an explicit new owner submission where needed.
 6. Rebuild a clean search index from the resulting live account, run synthetic positive acceptance, then resume ingestion. Unpause sending separately after owner reconciliation. Record lost metadata and any arrivals that could not be reconciled.
 
-Rehearse the rebuild with synthetic data before cutover and after storage/schema changes. This procedure recovers what remains available; it does not promise restoration of lost metadata or an earlier mailbox state.
+The owner chose not to rehearse this rebuild or create a separate owner-recovery role; the procedure is documented but untested, and the owner's admin session is the recovery identity. This procedure recovers what remains available; it does not promise restoration of lost metadata or an earlier mailbox state.
 
 ## Acceptance checks
 

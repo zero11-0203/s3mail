@@ -15,7 +15,8 @@ import (
 
 // State is the account commit boundary: the account sequence, the restore
 // epoch and, per data type, the sequence of the last commit that changed
-// that type. A type's state may advance conservatively.
+// that type, and the history floor. A type's state may advance
+// conservatively.
 type State struct {
 	Seq        int64
 	Epoch      int64
@@ -24,6 +25,9 @@ type State struct {
 	Thread     int64
 	Identity   int64
 	Submission int64
+	// Floor is the history floor: change records at or below it may have
+	// been pruned (docs/operations/recovery.md#retention-deletion-and-garbage-collection).
+	Floor int64
 }
 
 // Of returns the state sequence of one JMAP data type.

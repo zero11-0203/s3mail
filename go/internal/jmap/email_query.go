@@ -436,7 +436,7 @@ func emailQueryChanges(ctx context.Context, c *call) (any, *MethodError) {
 		return nil, e
 	}
 	since, ok := parseQueryState(a.SinceQueryState, st, q.args...)
-	if !ok {
+	if !ok || !retained(since, st, "Email") {
 		return nil, methodErr("cannotCalculateChanges", "unknown query state, or different query arguments")
 	}
 	changes, err := c.s.Store.Changes(ctx, since, st.Email)

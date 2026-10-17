@@ -463,3 +463,69 @@ func TestComponentDeliveryEvents(t *testing.T) {
 		t.Errorf("submission %+v", back)
 	}
 }
+
+func TestComponentHistoryPruning(t *testing.T) {
+	a := localAccount(t)
+	ctx := context.Background()
+	clock := t0
+	a.Now = func() time.Time { return clock }
+	for i := 1; i <= 3; i++ {
+		if _, err := a.CommitReceipt(ctx, receipt(i, "Old", fmt.Sprintf("<o%d@example.net>", i), "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock = t0.Add(40 * 24 * time.Hour)
+	recent := receipt(4, "New", "<n@example.net>", "")
+	if _, err := a.CommitReceipt(ctx, recent); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := a.State(ctx)
+	first := a.mustGet(t, receipt(1, "", "", "").ID)
+	st, err := a.Commit(ctx, st, model.Mutation{Emails: []model.EmailChange{{Before: &first}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := a.DB.(*dynamodb.Client)
+
+	// The floor never passes the sequence a change reader still needs.
+	if p, err := a.PruneHistory(ctx, db, 1); err != nil || p != (Pruned{Floor: 1}) {
+		t.Fatalf("capped prune: %+v %v", p, err)
+	}
+	// It stops at the first change inside the retention window.
+	if p, err := a.PruneHistory(ctx, db, st.Seq); err != nil || p != (Pruned{Floor: 3}) {
+		t.Fatalf("prune: %+v %v", p, err)
+	}
+	if got, _ := a.State(ctx); got.Floor != 3 || got.Seq != st.Seq {
+		t.Errorf("state after prune %+v", got)
+	}
+	// Records under a floor are kept until it has been in force a while.
+	if p, err := a.PruneHistory(ctx, db, st.Seq); err != nil || p != (Pruned{Floor: 3}) {
+		t.Fatalf("prune within grace: %+v %v", p, err)
+	}
+	if changes, _ := a.Changes(ctx, 0, st.Seq); len(changes) != 5 {
+		t.Errorf("changes within grace: %d", len(changes))
+	}
+	clock = clock.Add(FloorGrace)
+	if p, err := a.PruneHistory(ctx, db, st.Seq); err != nil || p != (Pruned{Deleted: 3, Floor: 3}) {
+		t.Fatalf("prune after grace: %+v %v", p, err)
+	}
+	changes, _ := a.Changes(ctx, 0, st.Seq)
+	if len(changes) != 2 || changes[0].Seq != 4 {
+		t.Errorf("changes after prune %+v", changes)
+	}
+
+	day := 24 * time.Hour
+	for _, c := range []struct {
+		since time.Time
+		upto  int64
+		want  bool
+	}{
+		{clock.Add(-day), st.Seq, true},
+		{clock.Add(-day), st.Seq - 1, false},
+		{clock.Add(day), st.Seq, false},
+	} {
+		if got, err := a.EmailDestroyedSince(ctx, c.since, c.upto); err != nil || got != c.want {
+			t.Errorf("destroyed since %v upto %d: %v %v", c.since, c.upto, got, err)
+		}
+	}
+}

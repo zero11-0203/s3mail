@@ -474,7 +474,7 @@ func mailboxQueryChanges(ctx context.Context, c *call) (any, *MethodError) {
 	}
 	args := []any{compactJSON(a.Filter), a.Sort, a.SortAsTree, a.FilterAsTree}
 	since, ok := parseQueryState(a.SinceQueryState, st, args...)
-	if !ok {
+	if !ok || !retained(since, st, "Mailbox") {
 		return nil, methodErr("cannotCalculateChanges", "unknown query state, or different query arguments")
 	}
 	ids, e := mailboxResults(v, a.Filter, a.Sort, a.SortAsTree, a.FilterAsTree)

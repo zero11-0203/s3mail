@@ -35,6 +35,7 @@ func (a *Account) State(ctx context.Context) (model.State, error) {
 	if v, ok := num(out.Item["epoch"]); ok {
 		st.Epoch = v
 	}
+	st.Floor, _ = num(out.Item["historyFloor"])
 	st.Email, st.Mailbox, st.Thread, st.Identity, st.Submission = st.Seq, st.Seq, st.Seq, st.Seq, st.Seq
 	if v, ok := num(out.Item["emailState"]); ok {
 		st.Email = v

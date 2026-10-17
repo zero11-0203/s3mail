@@ -126,6 +126,7 @@ func (a *Account) rebuildOnce(ctx context.Context) (model.State, error) {
 		}
 	}
 	items = append(items, a.put("CHANGE#"+padded(next.Seq), map[string]types.AttributeValue{
+		"at":        n(a.now().Unix()),
 		"created":   idsByTypeAttr(nil),
 		"updated":   idsByTypeAttr(map[string][]string{"MailboxCounts": mailboxes}),
 		"destroyed": idsByTypeAttr(nil),

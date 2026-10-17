@@ -107,6 +107,12 @@ variable "submission_recovery_zip" {
   default     = "../../go/build/submission-recovery/bootstrap.zip"
 }
 
+variable "gc_zip" {
+  description = "Path to the gc Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/gc/bootstrap.zip"
+}
+
 variable "relay_webhook_zip" {
   description = "Path to the relay-webhook Lambda zip built by make build."
   type        = string

@@ -50,7 +50,7 @@ func objectChanges(ctx context.Context, c *call, typ string, ids func(Change) (c
 	}
 	c.s.epoch = st.Epoch
 	since, ok := parseState(a.SinceState, st)
-	if !ok {
+	if !ok || !retained(since, st, typ) {
 		return changesResponse{}, nil, methodErr("cannotCalculateChanges", "unknown or expired state")
 	}
 	changes, err := c.s.Store.Changes(ctx, since, st.Of(typ))
@@ -153,6 +153,13 @@ func queryState(epoch, seq int64, args ...any) string {
 	b, _ := json.Marshal(args)
 	sum := sha256.Sum256(b)
 	return fmt.Sprintf("q%d-%d-%s", epoch, seq, hex.EncodeToString(sum[:6]))
+}
+
+// retained reports whether the change records after seq up to the type's
+// state still exist: records at or below the history floor may have been
+// pruned, so an older state needs a full resynchronization.
+func retained(seq int64, cur State, typ string) bool {
+	return seq >= cur.Floor || seq >= cur.Of(typ)
 }
 
 func parseQueryState(tok string, cur State, args ...any) (int64, bool) {

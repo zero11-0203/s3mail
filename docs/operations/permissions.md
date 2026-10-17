@@ -202,6 +202,21 @@ It has no table, mail, relay-credential or other queue access; reserved concurre
 - Only the dispatcher deletes table items. Worker, recovery and delivery commits write STATE, CHANGE, SUBMISSION, ATTEMPT, QUOTA and OUTBOX records and never delete; attempt records are append-only.
 - No `dynamodb:Scan`, SES, SNS, IAM or `sts:AssumeRole`.
 
+### `s3mail-gc` (Lambda execution role)
+
+- **Module:** `infra/modules/maintenance`
+- **Purpose:** the daily derived-data collector: advance the history floor, delete CHANGE records under it and purge search index versions older than the registered generation after an Email is destroyed.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-gc` log group | — |
+| `PruneOwnAccountHistory` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:UpdateItem`, `dynamodb:DeleteItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ListIndexVersions` | `s3:ListBucketVersions` | index bucket | `s3:prefix` like `index/*` |
+| `PurgeIndexVersions` | `s3:DeleteObjectVersion` | `<index bucket>/index/*` | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
+
+It has no grant on the original-mail or blob buckets, cannot read or write objects, and cannot add delete markers (`s3:DeleteObject`). DynamoDB grants cannot be narrowed by sort key, so `DeleteItem` covers the whole account partition; the code deletes only CHANGE records at or below the floor.
+
 ## Resource policies
 
 | Resource | Principal | Grant | Condition |
@@ -220,6 +235,7 @@ It has no table, mail, relay-credential or other queue access; reserved concurre
 | Index DLQ | — | Redrive allowed only from the index queue | — |
 | `s3mail-outbound-dispatcher` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-dispatcher` schedule rule |
 | `s3mail-outbound-recovery` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-recovery` schedule rule |
+| `s3mail-gc` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-gc` schedule rule |
 | Submission DLQ | — | Redrive allowed only from the submission queue | — |
 | `s3mail-outbound-webhook` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/POST/webhooks/smtp2go` (no gateway authorizer; the function checks the bearer secret) |
 | Delivery DLQ | — | Redrive allowed only from the delivery queue | — |
@@ -230,5 +246,5 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The GC and owner-recovery roles. Uploads run in the API role.
+- The owner-recovery role, which the owner chose not to create. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.

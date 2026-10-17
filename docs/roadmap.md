@@ -49,7 +49,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 
 ### Phase 3 — Recovery and primary-mail cutover
 
-- Rehearse independent owner/identity recovery, seven-day derived-data GC that excludes originals and an outbound-paused rebuild using surviving metadata/originals. Verify the accepted metadata-loss behavior without backups; do not add backup buckets, scheduled exports or DynamoDB PITR. Reconcile surviving deletion/attempt evidence before resuming use.
+- Seven-day derived-data GC that excludes originals ([deployed collector](operations/recovery.md#derived-data-collector)). The owner chose not to rehearse independent owner/identity recovery or an outbound-paused rebuild, nor to create a separate recovery role; the [runbook](operations/recovery.md#restore-runbook) stays documented and untested. Verify the accepted metadata-loss behavior without backups; do not add backup buckets, scheduled exports or DynamoDB PITR. Reconcile surviving deletion/attempt evidence before resuming use.
 - Complete deployed negative/infrastructure checks, nonce-bound canary, owner positive acceptance, external deliverability and coordinated code/infrastructure rollback procedures.
 - Verify the core Phases 0–3 gates in [release gates](roadmap.md#release-gates), including aerc/CLI acceptance, transport limits, bounded index costs and absence of CI data access. Move primary MX/use only after these pass. Browser hosting, browser HTML-safety tests and CLI/browser interoperability are Phase 4 gates, so they do not delay this CLI-based cutover.
 

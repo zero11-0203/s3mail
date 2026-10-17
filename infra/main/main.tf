@@ -1,6 +1,6 @@
 # Root configuration for the single deployed environment: the dns,
 # mail-store, mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search,
-# auth and ops modules; see docs/operations/deployment.md.
+# maintenance, auth and ops modules; see docs/operations/deployment.md.
 
 # Phase 0 streaming spike; temporary and disabled by default.
 module "spike_stream" {
@@ -122,6 +122,18 @@ module "mail_outbound" {
   index_queue_arn      = module.search.index_queue_arn
 }
 
+# Daily derived-data collection: history pruning and index version purges.
+module "maintenance" {
+  source = "../modules/maintenance"
+
+  gc_zip            = var.gc_zip
+  table_name        = module.mail_store.table_name
+  table_arn         = module.mail_store.table_arn
+  account_id        = module.mail_store.account_id
+  account_partition = module.mail_store.account_partition
+  index_bucket      = module.search.index_bucket
+}
+
 # The operations dashboard; no alarms or custom metrics, to avoid their cost.
 module "ops" {
   source = "../modules/ops"
@@ -138,10 +150,11 @@ module "ops" {
     relay-event-dlq = { arn = module.mail_outbound.delivery_dlq_arn, dead_letter = true }
   }
   functions = {
-    inbound  = [module.mail_inbound.ingest_function]
-    jmap     = concat(values(module.jmap_api.function_names), [module.jmap_api.authorizer_function_name])
-    outbound = values(module.mail_outbound.function_names)
-    search   = values(module.search.function_names)
+    inbound     = [module.mail_inbound.ingest_function]
+    jmap        = concat(values(module.jmap_api.function_names), [module.jmap_api.authorizer_function_name])
+    outbound    = values(module.mail_outbound.function_names)
+    search      = values(module.search.function_names)
+    maintenance = [module.maintenance.function_name]
   }
   api = module.jmap_api.api
 }
