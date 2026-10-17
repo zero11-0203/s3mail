@@ -29,6 +29,7 @@ Measured Phase 0 results; requirements stay in the owning specs.
 - [REST API response streaming spike](evidence/phase0-streaming-spike.md)
 - [SES receiving](evidence/phase0-ses-receiving.md)
 - [aerc read slice](evidence/phase0-aerc-slice.md)
+- [JMAP RFC conformance review](evidence/jmap-rfc-review.md)
 
 ## Operations
 
