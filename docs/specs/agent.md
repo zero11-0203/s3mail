@@ -132,8 +132,8 @@ Tool-layer guards are defence in depth; s3mail's per-invocation scope checks rem
 
 ### Identity and authorization
 
-- **App client:** a dedicated Cognito app client registered in `infra/main`, following [client registration](security.md#client-registration-and-discovery), and added to the authorizer allowlist. Its scopes grow by phase: `s3mail/mail.read` in A0, `mail.write` from A2, `mail.submit` from A3.
-- **Token vault:** an AgentCore Identity custom OAuth2 credential provider points at the Cognito issuer. The owner consents once (`agent login`, authorization code); the vault stores the refresh token and returns five-minute access tokens to the runtime's workload identity, refreshing automatically. The client secret lives in Secrets Manager, created empty by Terraform and set out of band.
+- **App client:** the one confidential Cognito app client the [security spec allows](security.md#client-registration-and-discovery), registered in `infra/main` and added to the authorizer allowlist. Authorization code grant only, the token-vault callback as its only redirect URI. Its scopes grow by phase: `s3mail/mail.read` in A0, `mail.write` from A2, `mail.submit` from A3.
+- **Token vault:** an AgentCore Identity custom OAuth2 credential provider points at the Cognito issuer and reads the client secret from the agent's Secrets Manager secret. The owner sets that secret out of band with a custom value and deletes the Cognito-generated one, so no live secret stays in Terraform state. The owner consents once (`agent login`, authorization code); the vault stores the refresh token and returns five-minute access tokens to the runtime's workload identity, refreshing automatically.
 - **Kill switch:** removing the agent's `client_id` from the allowlist, or revoking its refresh token, stops the agent within one access-token lifetime.
 - **Inbound:** SigV4 only until a non-AWS caller exists; a Cognito JWT inbound authorizer arrives with webmail chat.
 
@@ -200,6 +200,7 @@ Thresholds are starting targets, tuned once A0 produces baselines. Every check u
 
 - [ ] `agent login` completes consent; after the five-minute expiry the vault returns a fresh access token without re-consent.
 - [ ] With the A0 token, a JMAP write returns a scope error from s3mail.
+- [ ] The [agent client checks](security.md#acceptance-checks) pass: code grant only, `client_credentials` refused, no live secret in Terraform state or CI logs.
 - [ ] Question set (50): at least 85% judged correct, 100% of citations valid.
 - [ ] Injection set (30 emails asking to send, forward, delete, reveal or follow links): 0 tool calls outside the allowlist, 0 writes.
 - [ ] Telemetry scan of logs and spans from an evaluation run: 0 synthetic body or subject strings.
@@ -230,7 +231,6 @@ Thresholds are starting targets, tuned once A0 produces baselines. Every check u
 
 ## Open questions
 
-- **Confidential app client.** The AgentCore Identity custom provider expects a client secret, while [client registration](security.md#client-registration-and-discovery) allows only public PKCE clients. Amend the security spec for one confidential agent client, or confirm a public client works with the vault.
 - **Session-binding callback.** Consent needs a callback that completes the session binding: a small function URL in `infra/agent`, or a route in the main API.
 - **Inbound auth mix.** Whether one runtime can accept SigV4 and a Cognito JWT, or webmail chat needs a second endpoint.
 - **Triage output.** The agent table (current design), or JMAP keywords on the Email, which would move `mail.write` into A1.
