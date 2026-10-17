@@ -259,3 +259,38 @@ func TestSubmissionCancelAfterHandoffAndQueryChanges(t *testing.T) {
 		t.Errorf("queryChanges %v", qc)
 	}
 }
+
+// TestWebmailSendFlow follows the pinned webmail (root-fr/jmap-webmail
+// 1.7.3): Email/set create, then the submission with its hook, in one
+// request. The client fails the send when any response has a truthy
+// notCreated or notUpdated, so success must report them as null.
+func TestWebmailSendFlow(t *testing.T) {
+	s, m := sendingFixture()
+	ident := model.IdentityID("me@example.com")
+	out := runSubmit(t, s, owner, `[
+		["Email/set",{"accountId":"$ACCT","create":{"draft-1":{"from":[{"email":"me@example.com"}],"to":[{"email":"bob@example.net"}],
+			"subject":"hi","keywords":{"$draft":true},"mailboxIds":{"drafts":true},
+			"bodyValues":{"1":{"value":"hello"}},"textBody":[{"partId":"1","type":"text/plain"}]}}},"0"],
+		["EmailSubmission/set",{"accountId":"$ACCT","create":{"1":{"emailId":"#draft-1","identityId":"`+ident+`"}},
+			"onSuccessUpdateEmail":{"#1":{"mailboxIds/drafts":null,"mailboxIds/sent":true,"keywords/$draft":null,"keywords/$seen":true}}},"1"]]`)
+	if len(out) != 3 {
+		t.Fatalf("responses %v", out)
+	}
+	for i, name := range []string{"Email/set", "EmailSubmission/set", "Email/set"} {
+		r := result(t, out, i, name)
+		for _, k := range []string{"notCreated", "notUpdated", "notDestroyed"} {
+			if v, ok := r[k]; !ok || v != nil {
+				t.Errorf("%s %s = %v, want null", name, k, v)
+			}
+		}
+	}
+	id := result(t, out, 0, "Email/set")["created"].(map[string]any)["draft-1"].(map[string]any)["id"].(string)
+	if e := m.emails[id]; !e.MailboxIDs["sent"] || e.MailboxIDs["drafts"] || e.Keywords["$draft"] || len(m.sends) != 1 {
+		t.Errorf("sent copy %+v sends %v", e, m.sends)
+	}
+	// A failure is still reported by id.
+	out = runSubmit(t, s, owner, `[["Email/set",{"accountId":"$ACCT","update":{"Mnone":{"keywords/$seen":true}}},"0"]]`)
+	if nu, _ := result(t, out, 0, "Email/set")["notUpdated"].(map[string]any); nu["Mnone"] == nil {
+		t.Errorf("notUpdated %v", nu)
+	}
+}

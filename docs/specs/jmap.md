@@ -36,6 +36,8 @@ The implementation maintains a checked-in [conformance matrix](jmap-conformance.
 
 Methods and properties follow [JMAP Mail](https://www.rfc-editor.org/rfc/rfc8621.html); protocol-required behavior remains the acceptance criterion even when a reference client does not exercise it. WebSocket and optional push-subscription transports are not advertised until implemented.
 
+`/set` and `Email/import` responses report `notCreated`, `notUpdated` and `notDestroyed` as `null` when nothing failed, which RFC 8620 §5.3 allows: browser clients test them for truthiness, and an empty object would read as a failure (the pinned webmail reported delivered sends as failed).
+
 Support custom capabilities in session discovery and method dispatch, so project extensions can be added without changing core request handling. MIME projection includes text/HTML parts, inline content IDs and attachments. OAuth, per-invocation scope enforcement and registered-origin CORS follow [security](security.md); the matrix includes supported unread state, multi-mailbox membership, filters, sorting and pagination.
 
 ### Push

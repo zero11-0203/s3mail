@@ -561,22 +561,34 @@ type setArgs struct {
 }
 
 type setResponse struct {
-	AccountID    string               `json:"accountId"`
-	OldState     string               `json:"oldState"`
-	NewState     string               `json:"newState"`
-	Created      map[string]any       `json:"created"`
-	Updated      map[string]any       `json:"updated"`
-	Destroyed    []string             `json:"destroyed"`
-	NotCreated   map[string]*SetError `json:"notCreated"`
-	NotUpdated   map[string]*SetError `json:"notUpdated"`
-	NotDestroyed map[string]*SetError `json:"notDestroyed"`
+	AccountID    string         `json:"accountId"`
+	OldState     string         `json:"oldState"`
+	NewState     string         `json:"newState"`
+	Created      map[string]any `json:"created"`
+	Updated      map[string]any `json:"updated"`
+	Destroyed    []string       `json:"destroyed"`
+	NotCreated   setErrors      `json:"notCreated"`
+	NotUpdated   setErrors      `json:"notUpdated"`
+	NotDestroyed setErrors      `json:"notDestroyed"`
+}
+
+// setErrors is a /set response's failures by id. It is null when empty,
+// as RFC 8620 §5.3 allows: clients test it for truthiness, and an empty
+// JSON object is truthy, so {} reads as a failed set.
+type setErrors map[string]*SetError
+
+func (e setErrors) MarshalJSON() ([]byte, error) {
+	if len(e) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(map[string]*SetError(e))
 }
 
 func newSetResponse(accountID, state string) setResponse {
 	return setResponse{
 		AccountID: accountID, OldState: state, NewState: state,
 		Created: map[string]any{}, Updated: map[string]any{}, Destroyed: []string{},
-		NotCreated: map[string]*SetError{}, NotUpdated: map[string]*SetError{}, NotDestroyed: map[string]*SetError{},
+		NotCreated: setErrors{}, NotUpdated: setErrors{}, NotDestroyed: setErrors{},
 	}
 }
 
