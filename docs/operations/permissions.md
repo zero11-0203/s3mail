@@ -35,7 +35,7 @@
 ### `s3mail-jmap-api` (Lambda execution role)
 
 - **Module:** `infra/modules/jmap-api`
-- **Purpose:** serve session discovery and JMAP methods, including the guarded `Email/set` transaction ([JMAP](../specs/jmap.md), [conformance](../specs/jmap-conformance.md)).
+- **Purpose:** serve session discovery, JMAP methods and uploads, including the guarded commits of `Mailbox/set`, `Email/set` and `Email/import` ([JMAP](../specs/jmap.md), [conformance](../specs/jmap-conformance.md)).
 - **Trusted principal:** `lambda.amazonaws.com`.
 
 | Statement | Actions | Resource | Condition |
@@ -43,20 +43,26 @@
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-jmap-api` log group | — |
 | `ReadAndUpdateOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:DeleteItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/inbound/*` | — |
+| `ReadNewOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/imported/*`, `<original bucket>/composed/*` | — |
+| `ReadUploads` | `s3:GetObject` | `<blob bucket>/uploads/*` | — |
+| `ArchiveNewOriginals` | `s3:PutObject` | `<original bucket>/imported/*`, `<original bucket>/composed/*` | — |
+| `WriteUploads` | `s3:PutObject` | `<blob bucket>/uploads/*` | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
-`DeleteItem` removes listing entries when an Email leaves a mailbox. The same shared-table limitation as for ingest applies.
+`DeleteItem` removes listing, membership, index and summary records when an Email moves or is destroyed; Emails leave a deletion marker and their original is never deleted. Archive writes use new ids with `If-None-Match: *`; the bucket policy's delete deny still applies. The same shared-table limitation as for ingest applies.
 
 ### `s3mail-jmap-download` (Lambda execution role)
 
 - **Module:** `infra/modules/jmap-api`
-- **Purpose:** stream an authorized blob of a live Email ([blobs](../specs/jmap.md#limits-and-blobs)).
+- **Purpose:** stream an authorized blob of a live Email or an unexpired upload ([blobs](../specs/jmap.md#limits-and-blobs)).
 
 | Statement | Actions | Resource | Condition |
 | --- | --- | --- | --- |
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-jmap-download` log group | — |
 | `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:BatchGetItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/inbound/*` | — |
+| `ReadNewOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/imported/*`, `<original bucket>/composed/*` | — |
+| `ReadUploads` | `s3:GetObject` | `<blob bucket>/uploads/*` | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 ### `s3mail-jmap-push` (Lambda execution role)
@@ -80,7 +86,7 @@
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-authorizer` log group | — |
 
 **Excluded for all JMAP roles:**
-- No S3 write, delete or list, and no access outside `inbound/`.
+- No S3 delete or list. Only the API role writes S3: new originals under `imported/` and `composed/`, and uploads; nothing can write `inbound/` except SES.
 - No `dynamodb:Scan`, no other table and no other partition.
 - No SQS, SNS, SES, secrets, IAM or `sts:AssumeRole`.
 - The download and push roles cannot write to the table; push cannot read S3.
@@ -92,10 +98,11 @@
 | Original bucket | `ses.amazonaws.com` | `s3:PutObject` on `inbound/*` | `AWS:SourceAccount` = this account, `AWS:SourceArn` = the `deliver` receipt rule |
 | Original bucket | `*` | **Deny** `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:DeleteBucket`, `s3:PutLifecycleConfiguration`, `s3:PutBucketVersioning` | — |
 | Original bucket | `*` | **Deny** `s3:*` | `aws:SecureTransport` = false |
+| Blob bucket | `*` | **Deny** `s3:*` | `aws:SecureTransport` = false |
 | Receipt SNS topic | `ses.amazonaws.com` | `SNS:Publish` | `AWS:SourceAccount`, `AWS:SourceArn` as above |
 | Ingestion queue, delivery DLQ | `sns.amazonaws.com` | `sqs:SendMessage` | `aws:SourceArn` = receipt topic |
 | Ingestion DLQ | — | Redrive allowed only from the ingestion queue | — |
-| `s3mail-jmap-api` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/.well-known/jmap` and `<api>/*/POST/jmap` |
+| `s3mail-jmap-api` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/.well-known/jmap`, `<api>/*/POST/jmap` and `<api>/*/POST/upload/*` |
 | `s3mail-jmap-download` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/download/*` |
 | `s3mail-jmap-push` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/eventsource` |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
@@ -105,5 +112,5 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The dispatcher, indexer, submission, upload, webhook, GC and recovery roles.
+- The dispatcher, indexer, submission, webhook, GC and recovery roles. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -240,7 +241,45 @@ func (m *memStore) add(e EmailMeta, raw string) {
 func (m *memStore) Fetch(_ context.Context, ref BlobRef) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if b, ok := m.raw[ref.Key]; ok {
+		return b, nil
+	}
 	return m.raw[strings.TrimPrefix(ref.Key, "inbound/")], nil
+}
+
+// Put implements Archive: keys are never overwritten.
+func (m *memStore) Put(_ context.Context, kind, id string, raw []byte) (BlobRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := kind + "/" + id
+	if _, ok := m.raw[key]; ok {
+		return BlobRef{}, errors.New("archive key reused")
+	}
+	m.raw[key] = slices.Clone(raw)
+	return BlobRef{Bucket: "originals", Key: key, VersionID: "v1"}, nil
+}
+
+// memUploads implements Uploads.
+type memUploads struct {
+	mu sync.Mutex
+	b  map[string][]byte
+}
+
+func (u *memUploads) Put(_ context.Context, id, _ string, data []byte) (BlobRef, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.b["uploads/"+id] = slices.Clone(data)
+	return BlobRef{Bucket: "blobs", Key: "uploads/" + id}, nil
+}
+
+func (u *memUploads) Get(_ context.Context, ref BlobRef) ([]byte, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	b, ok := u.b[ref.Key]
+	if !ok {
+		return nil, errors.New("no such upload")
+	}
+	return b, nil
 }
 
 const (
@@ -258,12 +297,14 @@ const rawA = "From: =?utf-8?q?J=C3=B6rg?= <j@example.net>\r\nTo: alice@example.c
 
 func fixture() (*Server, *memStore) {
 	m := &memStore{st: State{Epoch: 1}, emails: map[string]EmailMeta{}, mailboxes: map[string]Mailbox{}, uploads: map[string]model.Upload{}, raw: map[string][]byte{}}
-	m.add(EmailMeta{ID: idA, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0, Subject: "日本", From: []string{"j@example.net"}}, rawA)
+	m.add(EmailMeta{ID: idA, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0, Subject: "日本", From: []string{"j@example.net"}, MessageID: "<a@example.net>"}, rawA)
 	m.add(EmailMeta{ID: idB, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0.Add(time.Hour), Subject: "second", From: []string{"bob@example.net"},
 		Keywords: map[string]bool{"$seen": true}}, "Subject: second\r\n\r\nB body\r\n")
 	m.add(EmailMeta{ID: idC, MailboxIDs: map[string]bool{"quarantine": true}, ReceivedAt: t0.Add(2 * time.Hour), Subject: "q"}, "Subject: q\r\n\r\nC\r\n")
 	s := NewServer("https://api.example.com/v1", m, m, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.PushPoll = 10 * time.Millisecond
+	s.Archive = m
+	s.Uploads = &memUploads{b: map[string][]byte{}}
 	return s, m
 }
 

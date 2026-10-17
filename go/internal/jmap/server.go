@@ -15,7 +15,12 @@ type Server struct {
 	BaseURL   string
 	Store     Store
 	Originals Originals
-	Log       *slog.Logger
+	// Archive and Uploads are needed by uploads, import and creation.
+	Archive Archive
+	Uploads Uploads
+	Log     *slog.Logger
+	// Now overrides the clock (tests).
+	Now func() time.Time
 	// PushPoll overrides PollInterval (tests).
 	PushPoll time.Duration
 
@@ -40,6 +45,10 @@ func NewServer(baseURL string, store Store, originals Originals, log *slog.Logge
 		"Email/changes":        {CapMail, ScopeRead, emailChanges},
 		"Email/queryChanges":   {CapMail, ScopeRead, emailQueryChanges},
 		"Email/set":            {CapMail, ScopeWrite, emailSet},
+		"Email/import":         {CapMail, ScopeWrite, emailImport},
+		"Email/parse":          {CapMail, ScopeRead, emailParse},
+		"Email/copy":           {CapMail, ScopeWrite, copyBetweenAccounts},
+		"Blob/copy":            {CapCore, ScopeWrite, copyBetweenAccounts},
 	}
 	return s
 }

@@ -56,18 +56,19 @@ module "auth" {
 module "jmap_api" {
   source = "../modules/jmap-api"
 
-  api_zip              = var.jmap_api_zip
-  download_zip         = var.jmap_download_zip
-  push_zip             = var.jmap_push_zip
-  authorizer_zip       = var.authorizer_zip
-  issuer               = module.auth.issuer
-  client_ids           = [module.auth.terminal_client_id]
-  scopes               = module.auth.scopes
-  owner_subject        = var.owner_subject
-  table_name           = module.mail_store.table_name
-  table_arn            = module.mail_store.table_arn
-  account_id           = module.mail_store.account_id
-  account_partition    = module.mail_store.account_partition
-  originals_bucket_arn = module.mail_inbound.originals_bucket_arn
-  ses_key_prefix       = module.mail_inbound.ses_key_prefix
+  api_zip               = var.jmap_api_zip
+  download_zip          = var.jmap_download_zip
+  push_zip              = var.jmap_push_zip
+  authorizer_zip        = var.authorizer_zip
+  issuer                = module.auth.issuer
+  client_ids            = [module.auth.terminal_client_id]
+  scopes                = module.auth.scopes
+  owner_subject         = var.owner_subject
+  table_name            = module.mail_store.table_name
+  table_arn             = module.mail_store.table_arn
+  account_id            = module.mail_store.account_id
+  account_partition     = module.mail_store.account_partition
+  originals_bucket_name = module.mail_inbound.originals_bucket
+  originals_bucket_arn  = module.mail_inbound.originals_bucket_arn
+  ses_key_prefix        = module.mail_inbound.ses_key_prefix
 }

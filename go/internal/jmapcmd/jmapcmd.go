@@ -3,8 +3,10 @@
 // (docs/operations/permissions.md).
 //
 // Environment: TABLE, ACCOUNT_ID (internal account), OWNER_SUB (the
-// Cognito subject mapped to it) and PUBLIC_URL (the public API root that
-// session URLs are built from).
+// Cognito subject mapped to it), PUBLIC_URL (the public API root that
+// session URLs are built from), ORIGINALS_BUCKET (durable MIME for new
+// Emails) and BLOBS_BUCKET (uploads). Each role's policy decides which of
+// the buckets the function can actually use.
 package jmapcmd
 
 import (
@@ -32,7 +34,7 @@ type Handler func(s *jmap.Server, ctx context.Context, req events.APIGatewayProx
 // Start configures the server from the environment and serves h.
 func Start(component string, h Handler) {
 	env := map[string]string{}
-	for _, k := range []string{"TABLE", "ACCOUNT_ID", "OWNER_SUB", "PUBLIC_URL"} {
+	for _, k := range []string{"TABLE", "ACCOUNT_ID", "OWNER_SUB", "PUBLIC_URL", "ORIGINALS_BUCKET", "BLOBS_BUCKET"} {
 		if env[k] = os.Getenv(k); env[k] == "" {
 			log.Fatalf("%s is required", k)
 		}
@@ -51,9 +53,12 @@ func Start(component string, h Handler) {
 		log.Fatal(err)
 	}
 	acct := &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]}
-	originals := &store.Originals{S3: s3.NewFromConfig(cfg), Log: base}
+	s3c := s3.NewFromConfig(cfg)
+	originals := &store.Originals{S3: s3c, Log: base}
 	owners := jmap.Owners{env["OWNER_SUB"]: env["ACCOUNT_ID"]}
 	srv := jmap.NewServer(strings.TrimSuffix(env["PUBLIC_URL"], "/"), acct, originals, base)
+	srv.Archive = &store.Archive{S3: s3c, Bucket: env["ORIGINALS_BUCKET"]}
+	srv.Uploads = &store.Uploads{S3: s3c, Bucket: env["BLOBS_BUCKET"]}
 
 	lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
 		// Lambda runs one invocation per environment at a time, so the

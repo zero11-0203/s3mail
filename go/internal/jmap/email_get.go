@@ -160,7 +160,10 @@ func emailGet(ctx context.Context, c *call) (any, *MethodError) {
 			}
 			return nil
 		}
-		ids = *a.IDs
+		ids = make([]string, len(*a.IDs))
+		for i, id := range *a.IDs {
+			ids[i], _ = c.resolveID(id)
+		}
 		if len(ids) > MaxObjectsInGet {
 			return nil
 		}
@@ -210,7 +213,7 @@ func emailGet(ctx context.Context, c *call) (any, *MethodError) {
 				}
 				msg = mailparse.Parse(raw)
 			}
-			objs[i] = buildEmail(m, msg, props, partProps, a)
+			objs[i] = buildEmail(m, emailBlobNames(m.ID), msg, props, partProps, a)
 		}()
 	}
 	wg.Wait()
@@ -253,7 +256,7 @@ func addressesOrNil(h mailparse.Headers, name string) any {
 	return mailparse.AsAddresses(v)
 }
 
-func buildEmail(m EmailMeta, msg *mailparse.Message, props, partProps []string, a emailGetArgs) map[string]any {
+func buildEmail(m EmailMeta, names blobNames, msg *mailparse.Message, props, partProps []string, a emailGetArgs) map[string]any {
 	out := map[string]any{}
 	var bodies mailparse.Bodies
 	if msg != nil && slices.ContainsFunc(props, func(p string) bool { return slices.Contains(bodyProperties, p) }) {
@@ -264,7 +267,7 @@ func buildEmail(m EmailMeta, msg *mailparse.Message, props, partProps []string, 
 		case "id":
 			out[p] = m.ID
 		case "blobId":
-			out[p] = rawBlobID(m.ID)
+			out[p] = names.raw
 		case "threadId":
 			out[p] = m.ThreadID
 		case "mailboxIds":
@@ -288,12 +291,12 @@ func buildEmail(m EmailMeta, msg *mailparse.Message, props, partProps []string, 
 		case "sentAt":
 			out[p] = headerValue(msg.Headers, headerProp{name: "Date", form: "asDate"})
 		case "bodyStructure":
-			out[p] = partObject(m.ID, msg.Body, partProps, true)
+			out[p] = partObject(names, msg.Body, partProps, true)
 		case "textBody", "htmlBody", "attachments":
 			list := map[string][]*mailparse.Part{"textBody": bodies.Text, "htmlBody": bodies.HTML, "attachments": bodies.Attachments}[p]
 			objs := []map[string]any{}
 			for _, part := range list {
-				objs = append(objs, partObject(m.ID, part, partProps, false))
+				objs = append(objs, partObject(names, part, partProps, false))
 			}
 			out[p] = objs
 		case "bodyValues":
@@ -348,7 +351,7 @@ func strOrNil(s string) any {
 	return s
 }
 
-func partObject(emailID string, p *mailparse.Part, props []string, recurse bool) map[string]any {
+func partObject(names blobNames, p *mailparse.Part, props []string, recurse bool) map[string]any {
 	out := map[string]any{}
 	for _, name := range props {
 		switch name {
@@ -358,7 +361,7 @@ func partObject(emailID string, p *mailparse.Part, props []string, recurse bool)
 			if p.PartID == "" {
 				out[name] = nil
 			} else {
-				out[name] = partBlobID(emailID, p.PartID)
+				out[name] = names.part(p.PartID)
 			}
 		case "size":
 			out[name] = p.Size
@@ -390,7 +393,7 @@ func partObject(emailID string, p *mailparse.Part, props []string, recurse bool)
 			subs := []map[string]any{}
 			if recurse {
 				for _, s := range p.SubParts {
-					subs = append(subs, partObject(emailID, s, props, true))
+					subs = append(subs, partObject(names, s, props, true))
 				}
 			}
 			out[name] = subs
@@ -405,7 +408,7 @@ func partObject(emailID string, p *mailparse.Part, props []string, recurse bool)
 	if recurse && p.IsMultipart() && !slices.Contains(props, "subParts") {
 		subs := []map[string]any{}
 		for _, s := range p.SubParts {
-			subs = append(subs, partObject(emailID, s, props, true))
+			subs = append(subs, partObject(names, s, props, true))
 		}
 		out["subParts"] = subs
 	}

@@ -58,3 +58,26 @@ func validPartID(p string) bool {
 	}
 	return true
 }
+
+// blobNames names a message blob and its parts in Email objects.
+type blobNames struct{ raw, partPrefix string }
+
+func (b blobNames) part(partID string) string { return b.partPrefix + partID }
+
+func emailBlobNames(emailID string) blobNames {
+	return blobNames{raw: rawBlobID(emailID), partPrefix: "P" + emailID[1:] + "-"}
+}
+
+// names returns the names for a message stored at blobID, whose parts
+// extend its part path.
+func (b blobRef) names(blobID string) blobNames {
+	letter := "P"
+	if b.upload() {
+		letter = "V"
+	}
+	prefix := letter + b.Owner[1:] + "-"
+	if b.Part != "" {
+		prefix += b.Part + "."
+	}
+	return blobNames{raw: blobID, partPrefix: prefix}
+}

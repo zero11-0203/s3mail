@@ -14,7 +14,7 @@
 | Account id | `A` + base32 of a hash of the internal account and restore epoch: a restored account gets a new id (RFC 8620 §1.6.2) |
 | State tokens | `<epoch>-<seq>`, where `seq` is the last commit that changed the type (STATE `emailState`, `mailboxState`, `threadState`); `/changes` pages end at commit boundaries; a foreign epoch or future sequence is `cannotCalculateChanges` |
 | Query states | `q<epoch>-<seq>-<hash>`, where the hash covers the normalized filter, sort and query options; another query's state is `cannotCalculateChanges` |
-| `uploadUrl` | Required in the session object but **not served yet**; uploads fail until upload is implemented |
+| `uploadUrl` | `POST /upload/{accountId}`; see [blobs](#blobs-and-push) |
 
 ## Request handling (RFC 8620 §3)
 
@@ -44,16 +44,20 @@ Scope is the minimum wire scope; a call without it is `forbidden`. All calls are
 | `Email/changes` | 8621 §4.3 | read | Coalesced created/updated/destroyed with `maxChanges` paging at commit boundaries | — | `TestEmailSetAndChanges`, `TestChangesCoalesce` |
 | `Email/query` | 8621 §4.4 | read | Filters `inMailbox`, `inMailboxOtherThan`, `before`, `after`, `minSize`, `maxSize`, `hasKeyword`, `notKeyword`, the three thread-keyword filters over all thread members, `from`, `to`, `cc`, `subject` and the AND/OR/NOT operators; sorts as advertised (thread-keyword sorts over all members); `position`, `anchor`, `anchorOffset`, `limit` (cap 1024), `calculateTotal`; `collapseThreads` keeps each thread's first result | `text`, `body` and other search filters (`unsupportedFilter`) until [search](search.md) | `TestEmailQueryOptions` |
 | `Email/queryChanges` | 8621 §4.5 | read | Every Email changed since the query state is removed and, if still a result, re-added at its index; thread-dependent queries (`collapseThreads`, thread-keyword filters or sorts) include every member of a touched thread; `maxChanges` → `tooManyChanges`; `upToId` ignored | — | `TestQueryChanges` |
-| `Email/set` | 8621 §4.6 | write | `ifInState`; updates to `keywords`, `keywords/*`, `mailboxIds`, `mailboxIds/*` with validation (at least one mailbox, at most 8, known ids, valid keywords), creation references in ids and `mailboxIds`, one guarded transaction per Email; `destroy` removes the Email and its derived records, writes a deletion marker and never deletes the original | `create` (refused per object with `forbidden`) | `TestEmailSetAndChanges`, `TestEmailDestroyAndThreads` |
+| `Email/set` | 8621 §4.6 | write | `ifInState`; updates to `keywords`, `keywords/*`, `mailboxIds`, `mailboxIds/*` with validation (at least one mailbox, at most 8, known ids, valid keywords), creation references in ids and `mailboxIds`, one guarded transaction per Email; `destroy` removes the Email and its derived records, writes a deletion marker and never deletes the original; `create` composes MIME from header properties (including `header:*` in every form but `asGroupedAddresses`), `bodyStructure` or `textBody`/`htmlBody`/`attachments` with `bodyValues` and blob parts (inline `cid` attachments go into `multipart/related`), generates `Date` and `Message-ID` when absent, archives it under `composed/` before committing and threads it like a delivery. Rejected: server-set properties, `Content-*` at Email level, `Content-Transfer-Encoding` on parts, `charset` on `bodyValues` parts, unreferenced `bodyValues`, more than 64 parts or 20 MiB | — | `TestEmailSetAndChanges`, `TestEmailDestroyAndThreads`, `TestEmailCreate` (`blob_test.go`) |
+| `Email/import` | 8621 §4.8 | write | `ifInState`; from an upload or any readable blob; archives the exact bytes under `imported/` before the commit; `blobNotFound`, `invalidEmail`, `invalidProperties`, `tooLarge` (20 MiB) per object | — | `TestUploadImportParseAndDownload` |
+| `Email/parse` | 8621 §4.9 | read | Header and body properties of any readable message blob, including attached messages; object-only properties are null; part blob ids extend the parsed blob's part path | — | `TestUploadImportParseAndDownload` |
+| `Email/copy` | 8621 §4.7 | write | Single account: the same account is `invalidArguments`, any other `fromAccountNotFound` | — | `TestCopyMethods` |
+| `Blob/copy` | 8620 §6.3 | write | As `Email/copy` | — | `TestCopyMethods` |
 
-Not advertised or served yet: `Identity/*`, `EmailSubmission/*`, `SearchSnippet/get`, `Email/copy`, `Email/import`, `Email/parse`, `Blob/copy`, `VacationResponse/*`.
+Not advertised or served yet: `Identity/*`, `EmailSubmission/*`, `SearchSnippet/get`, `VacationResponse/*`.
 
 ## Blobs and push
 
 | Route | Behavior | Test |
 | --- | --- | --- |
-| `GET /download/{accountId}/{blobId}/{name}` | Raw message (`G…`) or one leaf part (`P…-<partId>`) of a live Email in the caller's account; anything else 404. Always `attachment` disposition with an RFC 8187 filename, `nosniff`, `Content-Security-Policy: sandbox`, `no-store` | `TestDownload` |
+| `GET /download/{accountId}/{blobId}/{name}` | Raw message (`G…`) or part (`P…-<path>`) of a live Email, or an unexpired upload (`U…`) or part of an uploaded message (`V…-<path>`), in the caller's account; a path such as `2.1` descends into attached messages; anything else 404. Always `attachment` disposition with an RFC 8187 filename, `nosniff`, `Content-Security-Policy: sandbox`, `no-store` | `TestDownload` |
 | `GET /eventsource` (RFC 8620 §7.3) | `types` (`*` or Email, Mailbox, Thread), `closeafter`, `ping` up to 300 s; polls STATE every 3 s; comment keepalive after 60 s quiet; ends at token expiry, 14 min 30 s, or 15 s before the Lambda deadline | `TestEventSource` |
-| `POST /upload/{accountId}` | Not served | — |
+| `POST /upload/{accountId}` (RFC 8620 §6.1) | `mail.write`; at most `maxSizeUpload` (413 `limit` problem); the body reaches Lambda base64-encoded (`binary_media_types` `*/*`); stored in the disposable blob bucket with a BLOB record; usable for 24 hours, then 404/`blobNotFound` | `TestUploadImportParseAndDownload`, `TestUploadLimitsAndScope` |
 
 Push connection leases ([JMAP push](jmap.md#push)) are not implemented; the push function's reserved concurrency (4) caps open streams instead.

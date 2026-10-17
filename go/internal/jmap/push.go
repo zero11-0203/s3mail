@@ -11,16 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-
-	"github.com/zero11-0203/s3mail/go/internal/mailparse"
 )
-
-func parseForDownload(raw []byte, partID string) []byte {
-	if p := mailparse.Parse(raw).Find(partID); p != nil {
-		return p.Content()
-	}
-	return nil
-}
 
 // Push timing (docs/specs/jmap.md#push).
 const (

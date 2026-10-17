@@ -60,8 +60,12 @@ func problemResponse(p *Problem) *events.APIGatewayProxyStreamingResponse {
 	return jsonResponse(p.Status, "application/problem+json", p)
 }
 
-// HandleAPI serves GET /.well-known/jmap and POST /jmap.
+// HandleAPI serves GET /.well-known/jmap, POST /jmap and POST
+// /upload/{accountId}.
 func (s *Server) HandleAPI(ctx context.Context, req events.APIGatewayProxyRequest, owners Owners) (*events.APIGatewayProxyStreamingResponse, error) {
+	if req.Resource == "/upload/{accountId}" {
+		return s.HandleUpload(ctx, req, owners)
+	}
 	acct, ok := AccountFromRequest(req, owners)
 	if !ok {
 		return problemResponse(problem("forbidden", 403, "no account is mapped to this subject")), nil
@@ -137,7 +141,8 @@ func header(h map[string]string, name string) string {
 }
 
 // HandleDownload serves GET /download/{accountId}/{blobId}/{name}: the
-// blob must belong to a live Email of the caller's account.
+// blob must belong to a live Email or an unexpired upload of the caller's
+// account.
 func (s *Server) HandleDownload(ctx context.Context, req events.APIGatewayProxyRequest, owners Owners) (*events.APIGatewayProxyStreamingResponse, error) {
 	acct, ok := AccountFromRequest(req, owners)
 	if !ok || !acct.has(ScopeRead) {
@@ -153,37 +158,20 @@ func (s *Server) HandleDownload(ctx context.Context, req events.APIGatewayProxyR
 	if p["accountId"] != s.publicID(acct) {
 		return notFound, nil
 	}
-	ref, ok := ParseBlobID(p["blobId"])
-	if !ok || ref.upload() {
-		return notFound, nil
-	}
-	emailID, partID := ref.Owner, ref.Part
-	found, err := s.Store.GetEmails(ctx, []string{emailID})
-	if err != nil {
-		return problemResponse(problem("serverFail", 500, "")), nil
-	}
-	m, ok := found[emailID]
-	if !ok {
-		return notFound, nil
-	}
-	raw, err := s.Originals.Fetch(ctx, m.Blob)
+	b, ok, err := s.readBlob(ctx, p["blobId"])
 	if err != nil {
 		s.Log.Error("download", "outcome", "serverFail", "error", err)
 		return problemResponse(problem("serverFail", 500, "")), nil
 	}
-	content := raw
-	if partID != "" {
-		part := parseForDownload(raw, partID)
-		if part == nil {
-			return notFound, nil
-		}
-		content = part
+	if !ok {
+		return notFound, nil
 	}
+	content := b.data
 	ctype := req.QueryStringParameters["type"]
 	if ctype == "" || strings.ContainsAny(ctype, "\r\n") {
 		ctype = "application/octet-stream"
 	}
-	s.Log.Info("download", "outcome", "ok", "emailId", emailID, "part", partID, "size", len(content))
+	s.Log.Info("download", "outcome", "ok", "size", len(content))
 	return &events.APIGatewayProxyStreamingResponse{
 		StatusCode: 200,
 		Headers: map[string]string{

@@ -73,6 +73,11 @@ variable "account_partition" {
   type        = string
 }
 
+variable "originals_bucket_name" {
+  type        = string
+  description = "Permanent original-mail bucket; imported and composed MIME goes under imported/ and composed/."
+}
+
 variable "originals_bucket_arn" {
   type = string
 }

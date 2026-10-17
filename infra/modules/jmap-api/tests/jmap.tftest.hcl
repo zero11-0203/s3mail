@@ -31,20 +31,21 @@ mock_provider "aws" {
 }
 
 variables {
-  api_zip              = "tests/fake-lambda.txt"
-  download_zip         = "tests/fake-lambda.txt"
-  push_zip             = "tests/fake-lambda.txt"
-  authorizer_zip       = "tests/fake-lambda.txt"
-  issuer               = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
-  client_ids           = ["exampleclient"]
-  scopes               = ["s3mail/mail.read", "s3mail/mail.write", "s3mail/mail.submit"]
-  owner_subject        = "00000000-0000-4000-8000-000000000000"
-  table_name           = "s3mail-mail"
-  table_arn            = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-mail"
-  account_id           = "primary"
-  account_partition    = "ACCOUNT#primary"
-  originals_bucket_arn = "arn:aws:s3:::s3mail-originals-test"
-  ses_key_prefix       = "inbound/"
+  api_zip               = "tests/fake-lambda.txt"
+  download_zip          = "tests/fake-lambda.txt"
+  push_zip              = "tests/fake-lambda.txt"
+  authorizer_zip        = "tests/fake-lambda.txt"
+  issuer                = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
+  client_ids            = ["exampleclient"]
+  scopes                = ["s3mail/mail.read", "s3mail/mail.write", "s3mail/mail.submit"]
+  owner_subject         = "00000000-0000-4000-8000-000000000000"
+  table_name            = "s3mail-mail"
+  table_arn             = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-mail"
+  account_id            = "primary"
+  account_partition     = "ACCOUNT#primary"
+  originals_bucket_name = "s3mail-originals-test"
+  originals_bucket_arn  = "arn:aws:s3:::s3mail-originals-test"
+  ses_key_prefix        = "inbound/"
 }
 
 run "every_jmap_route_requires_the_bearer_authorizer" {
@@ -76,9 +77,24 @@ run "roles_are_least_privilege" {
 
   assert {
     condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
-      for s in jsondecode(p.policy).Statement : !anytrue([for a in flatten([s.Action]) : can(regex("^s3:(Put|Delete)|^dynamodb:(Scan|\\*)|\\*$", a))])
+      for s in jsondecode(p.policy).Statement : !anytrue([for a in flatten([s.Action]) : can(regex("^s3:Delete|^dynamodb:(Scan|\\*)|\\*$", a))])
     ])])
-    error_message = "no JMAP role writes or deletes originals, scans or uses wildcards"
+    error_message = "no JMAP role deletes S3 objects, scans or uses wildcards"
+  }
+
+  assert {
+    condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
+      for s in jsondecode(p.policy).Statement : k == "api" && alltrue([
+        for r in flatten([s.Resource]) : can(regex("^arn:aws:s3:::s3mail-originals-test/(imported|composed)/\\*$", r)) || endswith(r, "/uploads/*")
+      ])
+      if anytrue([for a in flatten([s.Action]) : startswith(a, "s3:Put")])
+    ])])
+    error_message = "only the API role writes S3, and only new originals under imported/ and composed/ or uploads"
+  }
+
+  assert {
+    condition     = one([for r in aws_s3_bucket_lifecycle_configuration.blobs.rule : r.expiration[0].days]) == 1
+    error_message = "uploads expire from the disposable bucket"
   }
 
   assert {

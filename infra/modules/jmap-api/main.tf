@@ -23,9 +23,23 @@ locals {
   }
   own_partition = { "ForAllValues:StringEquals" = { "dynamodb:LeadingKeys" = [var.account_partition] } }
 
+  # Imported and composed Emails read back their archived MIME.
+  read_new_originals = {
+    Sid      = "ReadNewOriginalVersions"
+    Effect   = "Allow"
+    Action   = "s3:GetObjectVersion"
+    Resource = ["${var.originals_bucket_arn}/imported/*", "${var.originals_bucket_arn}/composed/*"]
+  }
+  read_uploads = {
+    Sid      = "ReadUploads"
+    Effect   = "Allow"
+    Action   = "s3:GetObject"
+    Resource = "${aws_s3_bucket.blobs.arn}/uploads/*"
+  }
+
   functions = {
-    # Session discovery and the JMAP method endpoint. Email/set writes
-    # STATE, EMAIL, LIST, CHANGE and OUTBOX items in one transaction.
+    # Session discovery, the JMAP method endpoint and uploads. Commits
+    # write the account's records in one guarded transaction.
     api = {
       zip         = var.api_zip
       memory      = 1024
@@ -40,6 +54,22 @@ locals {
           Condition = local.own_partition
         },
         local.read_originals,
+        local.read_new_originals,
+        local.read_uploads,
+        {
+          # Durable MIME for Email/import and Email/set create. Keys are
+          # new ids written with If-None-Match; no delete grant exists.
+          Sid      = "ArchiveNewOriginals"
+          Effect   = "Allow"
+          Action   = "s3:PutObject"
+          Resource = ["${var.originals_bucket_arn}/imported/*", "${var.originals_bucket_arn}/composed/*"]
+        },
+        {
+          Sid      = "WriteUploads"
+          Effect   = "Allow"
+          Action   = "s3:PutObject"
+          Resource = "${aws_s3_bucket.blobs.arn}/uploads/*"
+        },
       ]
     }
     # Blob downloads: read-only.
@@ -57,6 +87,8 @@ locals {
           Condition = local.own_partition
         },
         local.read_originals,
+        local.read_new_originals,
+        local.read_uploads,
       ]
     }
     # EventSource: polls STATE only. Reserved concurrency caps open streams
@@ -148,10 +180,12 @@ resource "aws_lambda_function" "fn" {
 
   environment {
     variables = {
-      TABLE      = var.table_name
-      ACCOUNT_ID = var.account_id
-      OWNER_SUB  = var.owner_subject
-      PUBLIC_URL = local.base_url
+      TABLE            = var.table_name
+      ACCOUNT_ID       = var.account_id
+      OWNER_SUB        = var.owner_subject
+      PUBLIC_URL       = local.base_url
+      ORIGINALS_BUCKET = var.originals_bucket_name
+      BLOBS_BUCKET     = aws_s3_bucket.blobs.id
     }
   }
 
@@ -175,6 +209,82 @@ resource "aws_lambda_alias" "live" {
   name             = "live"
   function_name    = aws_lambda_function.fn[each.key].function_name
   function_version = aws_lambda_function.fn[each.key].version
+}
+
+# --- Disposable blob bucket ----------------------------------------------------
+
+# Uploads only: unversioned, expiring after a day, separate from the
+# permanent originals (docs/operations/recovery.md#retention-deletion-and-garbage-collection).
+# An import copies the complete MIME into the original bucket first.
+resource "aws_s3_bucket" "blobs" {
+  bucket_prefix = "${var.name}-blobs-"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "blobs" {
+  bucket = aws_s3_bucket.blobs.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "blobs" {
+  bucket                  = aws_s3_bucket.blobs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "blobs" {
+  bucket = aws_s3_bucket.blobs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "blobs" {
+  bucket = aws_s3_bucket.blobs.id
+
+  rule {
+    id     = "expire-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = "uploads/"
+    }
+
+    # Uploads stop resolving at 24 hours; S3 then removes the bytes at
+    # the next midnight UTC after a day.
+    expiration {
+      days = 1
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "blobs" {
+  bucket = aws_s3_bucket.blobs.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "TlsOnly"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.blobs.arn, "${aws_s3_bucket.blobs.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.blobs]
 }
 
 # --- Authorizer --------------------------------------------------------------
@@ -239,8 +349,9 @@ resource "aws_lambda_function" "authorizer" {
 resource "aws_api_gateway_rest_api" "this" {
   name = "${var.name}-jmap"
 
-  # Binary request bodies (uploads, later) reach Lambda base64-encoded.
-  binary_media_types = ["application/octet-stream"]
+  # Every request body reaches Lambda base64-encoded, so uploads of any
+  # type keep their exact bytes; the handlers decode JSON bodies too.
+  binary_media_types = ["*/*"]
 
   endpoint_configuration {
     types = ["REGIONAL"]
@@ -287,7 +398,7 @@ resource "aws_api_gateway_gateway_response" "unauthorized" {
 }
 
 # Path tree: /.well-known/{jmap,oauth-protected-resource}, /jmap,
-# /download/{accountId}/{blobId}/{name}, /eventsource.
+# /download/{accountId}/{blobId}/{name}, /upload/{accountId}, /eventsource.
 resource "aws_api_gateway_resource" "well_known" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   parent_id   = aws_api_gateway_rest_api.this.root_resource_id
@@ -330,6 +441,18 @@ resource "aws_api_gateway_resource" "download_name" {
   path_part   = "{name}"
 }
 
+resource "aws_api_gateway_resource" "upload" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_rest_api.this.root_resource_id
+  path_part   = "upload"
+}
+
+resource "aws_api_gateway_resource" "upload_account" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.upload.id
+  path_part   = "{accountId}"
+}
+
 resource "aws_api_gateway_resource" "eventsource" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   parent_id   = aws_api_gateway_rest_api.this.root_resource_id
@@ -340,6 +463,7 @@ locals {
   routes = {
     session     = { resource = aws_api_gateway_resource.session.id, method = "GET", fn = "api", path = "GET/.well-known/jmap" }
     jmap        = { resource = aws_api_gateway_resource.jmap.id, method = "POST", fn = "api", path = "POST/jmap" }
+    upload      = { resource = aws_api_gateway_resource.upload_account.id, method = "POST", fn = "api", path = "POST/upload/*" }
     download    = { resource = aws_api_gateway_resource.download_name.id, method = "GET", fn = "download", path = "GET/download/*" }
     eventsource = { resource = aws_api_gateway_resource.eventsource.id, method = "GET", fn = "push", path = "GET/eventsource" }
   }
@@ -451,6 +575,7 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_resource.session,
       aws_api_gateway_resource.jmap,
       aws_api_gateway_resource.download_name,
+      aws_api_gateway_resource.upload_account,
       aws_api_gateway_resource.eventsource,
       aws_api_gateway_method.route,
       aws_api_gateway_integration.route,

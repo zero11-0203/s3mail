@@ -98,6 +98,8 @@ type SetError struct {
 	Type        string   `json:"type"`
 	Description string   `json:"description,omitempty"`
 	Properties  []string `json:"properties,omitempty"`
+	// NotFound lists missing blob ids for blobNotFound (RFC 8621 §4.6).
+	NotFound []string `json:"notFound,omitempty"`
 }
 
 type handlerFunc func(ctx context.Context, c *call) (any, *MethodError)
