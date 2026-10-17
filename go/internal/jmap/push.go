@@ -106,10 +106,17 @@ func (s *Server) stream(ctx context.Context, w io.Writer, acct Account, last Sta
 		_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 		return err
 	}
-	stateEvent := func(st State) error {
+	// stateEvent reports the requested types whose state differs from
+	// prev; the first event reports them all.
+	stateEvent := func(st State, prev *State) error {
 		changed := map[string]string{}
 		for _, t := range types {
-			changed[t] = stateToken(st)
+			if prev == nil || st.Of(t) != prev.Of(t) {
+				changed[t] = stateToken(st, t)
+			}
+		}
+		if len(changed) == 0 {
+			return nil
 		}
 		b, _ := json.Marshal(map[string]any{"@type": "StateChange", "changed": map[string]any{id: changed}})
 		return send("state", string(b))
@@ -118,7 +125,7 @@ func (s *Server) stream(ctx context.Context, w io.Writer, acct Account, last Sta
 		return err
 	}
 	if len(types) > 0 {
-		if err := stateEvent(last); err != nil {
+		if err := stateEvent(last, nil); err != nil {
 			return err
 		}
 	}
@@ -141,10 +148,13 @@ func (s *Server) stream(ctx context.Context, w io.Writer, acct Account, last Sta
 			if err != nil {
 				return err
 			}
-			if st != last {
+			if relevant := slices.ContainsFunc(types, func(t string) bool { return st.Of(t) != last.Of(t) }); st.Epoch == last.Epoch && !relevant {
+				last = st
+			} else if st != last {
+				prev := last
 				last = st
 				if len(types) > 0 {
-					if err := stateEvent(st); err != nil {
+					if err := stateEvent(st, &prev); err != nil {
 						return err
 					}
 					lastWrite = now

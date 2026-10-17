@@ -7,22 +7,27 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+
+	"github.com/zero11-0203/s3mail/go/internal/model"
 )
 
-// memStore is an in-memory account with the same sequence guard as the
-// DynamoDB store.
+// memStore is an in-memory account that commits through model.Plan with
+// the same sequence guard as the DynamoDB store.
 type memStore struct {
-	mu      sync.Mutex
-	st      State
-	emails  map[string]EmailMeta
-	changes []Change
-	raw     map[string][]byte
+	mu        sync.Mutex
+	st        State
+	emails    map[string]EmailMeta
+	mailboxes map[string]Mailbox
+	uploads   map[string]model.Upload
+	changes   []Change
+	raw       map[string][]byte
 }
 
 func (m *memStore) State(context.Context) (State, error) {
@@ -34,23 +39,11 @@ func (m *memStore) State(context.Context) (State, error) {
 func (m *memStore) ListEmails(context.Context) ([]EmailMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return clone(slicesOf(m.emails)), nil
-}
-
-func slicesOf(mp map[string]EmailMeta) []EmailMeta {
 	var out []EmailMeta
-	for _, e := range mp {
-		out = append(out, e)
+	for _, e := range m.emails {
+		out = append(out, e.Clone())
 	}
-	return out
-}
-
-func clone(es []EmailMeta) []EmailMeta {
-	for i := range es {
-		es[i].Keywords = maps.Clone(es[i].Keywords)
-		es[i].MailboxIDs = maps.Clone(es[i].MailboxIDs)
-	}
-	return es
+	return out, nil
 }
 
 func (m *memStore) GetEmails(_ context.Context, ids []string) (map[string]EmailMeta, error) {
@@ -59,8 +52,66 @@ func (m *memStore) GetEmails(_ context.Context, ids []string) (map[string]EmailM
 	out := map[string]EmailMeta{}
 	for _, id := range ids {
 		if e, ok := m.emails[id]; ok {
-			out[id] = clone([]EmailMeta{e})[0]
+			out[id] = e.Clone()
 		}
+	}
+	return out, nil
+}
+
+func (m *memStore) ListMailboxes(context.Context) ([]Mailbox, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Collect(maps.Values(m.mailboxes)), nil
+}
+
+func (m *memStore) MailboxCounts(context.Context) (map[string]model.Counts, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]model.Counts{}
+	threads := map[model.MBThreadKey]model.MBThread{}
+	for _, e := range m.emails {
+		for mb := range e.MailboxIDs {
+			c := out[mb]
+			c.TotalEmails++
+			k := model.MBThreadKey{Mailbox: mb, Thread: e.ThreadID}
+			t := threads[k]
+			t.Emails++
+			if e.Unread() {
+				c.UnreadEmails++
+				t.Unread++
+			}
+			out[mb], threads[k] = c, t
+		}
+	}
+	for k, t := range threads {
+		c := out[k.Mailbox]
+		c.TotalThreads++
+		if t.Unread > 0 {
+			c.UnreadThreads++
+		}
+		out[k.Mailbox] = c
+	}
+	return out, nil
+}
+
+func (m *memStore) ThreadMembers(_ context.Context, ids []string) (map[string][]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string][]string{}
+	var all []EmailMeta
+	for _, e := range m.emails {
+		if slices.Contains(ids, e.ThreadID) {
+			all = append(all, e)
+		}
+	}
+	slices.SortFunc(all, func(a, b EmailMeta) int {
+		if c := a.ReceivedAt.Compare(b.ReceivedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	for _, e := range all {
+		out[e.ThreadID] = append(out[e.ThreadID], e.ID)
 	}
 	return out, nil
 }
@@ -77,32 +128,113 @@ func (m *memStore) Changes(_ context.Context, after, upto int64) ([]Change, erro
 	return out, nil
 }
 
-func (m *memStore) UpdateEmail(_ context.Context, prev State, _, after EmailMeta) error {
+func (m *memStore) GetUpload(_ context.Context, id string) (model.Upload, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.uploads[id]
+	return u, ok, nil
+}
+
+func (m *memStore) ByMessageID(_ context.Context, keys []string) (map[string][]model.ThreadRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string][]model.ThreadRef{}
+	for _, e := range m.emails {
+		for _, k := range e.MessageIDKeys() {
+			if slices.Contains(keys, k) {
+				out[k] = append(out[k], model.ThreadRef{EmailID: e.ID, ThreadID: e.ThreadID, ReceivedAt: e.ReceivedAt, Addresses: e.Addresses()})
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) BySubject(_ context.Context, key string) ([]model.ThreadRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []model.ThreadRef
+	for _, e := range m.emails {
+		if e.SubjectKey() == key {
+			out = append(out, model.ThreadRef{EmailID: e.ID, ThreadID: e.ThreadID, ReceivedAt: e.ReceivedAt, Addresses: e.Addresses()})
+		}
+	}
+	return out, nil
+}
+
+// memDerived answers Plan's reads from the current emails.
+type memDerived struct{ emails map[string]EmailMeta }
+
+func (d memDerived) MBThread(k model.MBThreadKey) model.MBThread {
+	var t model.MBThread
+	for _, e := range d.emails {
+		if e.ThreadID == k.Thread && e.MailboxIDs[k.Mailbox] {
+			t.Emails++
+			if e.Unread() {
+				t.Unread++
+			}
+		}
+	}
+	return t
+}
+
+func (d memDerived) ThreadSize(id string) int64 {
+	var n int64
+	for _, e := range d.emails {
+		if e.ThreadID == id {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *memStore) Commit(_ context.Context, prev State, mu model.Mutation) (State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if prev != m.st {
-		return ErrStateChanged
+		return State{}, ErrStateChanged
 	}
-	m.st.Seq++
-	m.emails[after.ID] = after
-	m.changes = append(m.changes, Change{Seq: m.st.Seq, Updated: map[string][]string{"Email": {after.ID}}})
-	return nil
+	ef := model.Plan(mu, memDerived{m.emails})
+	for _, c := range mu.Emails {
+		if c.After != nil {
+			m.emails[c.After.ID] = c.After.Clone()
+		} else {
+			delete(m.emails, c.Before.ID)
+		}
+	}
+	for _, c := range mu.Mailboxes {
+		if c.After != nil {
+			m.mailboxes[c.After.ID] = *c.After
+		} else {
+			delete(m.mailboxes, c.Before.ID)
+		}
+	}
+	for _, u := range mu.Uploads {
+		m.uploads[u.ID] = u
+	}
+	m.st = ef.Next(m.st)
+	ch := ef.Change
+	ch.Seq = m.st.Seq
+	m.changes = append(m.changes, ch)
+	return m.st, nil
 }
 
 // add ingests an Email the way the receipt commit does.
 func (m *memStore) add(e EmailMeta, raw string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.st.Seq++
-	e.ThreadID = threadIDOf(e.ID)
+	if e.ThreadID == "" {
+		e.ThreadID = "T" + e.ID[1:]
+	}
 	e.Blob = BlobRef{Bucket: "b", Key: "inbound/" + e.ID, VersionID: "v1"}
 	e.Size = int64(len(raw))
 	if e.Keywords == nil {
 		e.Keywords = map[string]bool{}
 	}
-	m.emails[e.ID] = e
+	m.mu.Lock()
 	m.raw[e.ID] = []byte(raw)
-	m.changes = append(m.changes, Change{Seq: m.st.Seq, Created: map[string][]string{"Email": {e.ID}}})
+	st := m.st
+	m.mu.Unlock()
+	if _, err := m.Commit(context.Background(), st, model.Mutation{Emails: []model.EmailChange{{After: &e}}}); err != nil {
+		panic(err)
+	}
 }
 
 func (m *memStore) Fetch(_ context.Context, ref BlobRef) ([]byte, error) {
@@ -125,7 +257,7 @@ const rawA = "From: =?utf-8?q?J=C3=B6rg?= <j@example.net>\r\nTo: alice@example.c
 	"--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=a.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0x\r\n--b--\r\n"
 
 func fixture() (*Server, *memStore) {
-	m := &memStore{st: State{Epoch: 1}, emails: map[string]EmailMeta{}, raw: map[string][]byte{}}
+	m := &memStore{st: State{Epoch: 1}, emails: map[string]EmailMeta{}, mailboxes: map[string]Mailbox{}, uploads: map[string]model.Upload{}, raw: map[string][]byte{}}
 	m.add(EmailMeta{ID: idA, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0, Subject: "日本", From: []string{"j@example.net"}}, rawA)
 	m.add(EmailMeta{ID: idB, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0.Add(time.Hour), Subject: "second", From: []string{"bob@example.net"},
 		Keywords: map[string]bool{"$seen": true}}, "Subject: second\r\n\r\nB body\r\n")
@@ -265,7 +397,7 @@ func TestQueryThenGetByReference(t *testing.T) {
 		["Email/get",{"accountId":"$ACCT","#ids":{"resultOf":"q","name":"Email/changes","path":"/ids"}},"bad"]]`)
 	q := result(t, out, 0, "Email/query")
 	ids := q["ids"].([]any)
-	if len(ids) != 2 || ids[0] != idB || ids[1] != idA || q["total"].(float64) != 2 || q["canCalculateChanges"] != false {
+	if len(ids) != 2 || ids[0] != idB || ids[1] != idA || q["total"].(float64) != 2 || q["canCalculateChanges"] != true {
 		t.Fatalf("query %v", q)
 	}
 	g := result(t, out, 1, "Email/get")
@@ -357,7 +489,7 @@ func TestEmailSetAndChanges(t *testing.T) {
 			"`+idB+`":{"mailboxIds":{}},
 			"`+idC+`":{"subject":"x"},
 			"Mzzzzzzzzzzzzzzzzzzzzzzzz":{"keywords/$flagged":true}},
-			"destroy":["`+idB+`"],"create":{"k1":{}}},"0"],
+			"destroy":["Mzzzzzzzzzzzzzzzzzzzzzzzz"],"create":{"k1":{}}},"0"],
 		["Email/set",{"accountId":"$ACCT","ifInState":"1-3","update":{}},"1"],
 		["Email/changes",{"accountId":"$ACCT","sinceState":"1-3"},"2"],
 		["Email/changes",{"accountId":"$ACCT","sinceState":"1-0","maxChanges":2},"3"],
@@ -375,7 +507,7 @@ func TestEmailSetAndChanges(t *testing.T) {
 			t.Errorf("notUpdated %s = %v, want %s", id, got, want)
 		}
 	}
-	if r["notDestroyed"].(map[string]any)[idB] == nil || r["notCreated"].(map[string]any)["k1"] == nil {
+	if r["notDestroyed"].(map[string]any)["Mzzzzzzzzzzzzzzzzzzzzzzzz"] == nil || r["notCreated"].(map[string]any)["k1"] == nil {
 		t.Error("destroy and create must be refused per object")
 	}
 	if a := m.emails[idA]; !a.Keywords["$seen"] || a.MailboxIDs["inbox"] || !a.MailboxIDs["archive"] {
@@ -393,7 +525,7 @@ func TestEmailSetAndChanges(t *testing.T) {
 		t.Errorf("paged changes %v", page)
 	}
 	mc := result(t, out, 4, "Mailbox/changes")
-	if len(mc["updated"].([]any)) != len(mailboxes) || mc["updatedProperties"] == nil {
+	if len(mc["updated"].([]any)) != 2 || mc["updatedProperties"] == nil || mc["newState"] != "1-4" {
 		t.Errorf("mailbox changes %v", mc)
 	}
 	for _, mb := range result(t, out, 5, "Mailbox/get")["list"].([]any) {
@@ -405,7 +537,7 @@ func TestEmailSetAndChanges(t *testing.T) {
 			t.Errorf("archive counts %v", o)
 		}
 	}
-	if c := result(t, out, 6, "Thread/changes")["created"].([]any); len(c) != 3 || c[0] != threadIDOf(idA) {
+	if c := result(t, out, 6, "Thread/changes")["created"].([]any); len(c) != 3 || c[0] != "T"+idA[1:] {
 		t.Errorf("thread changes %v", c)
 	}
 	if errType(t, out, 7) != "cannotCalculateChanges" {
@@ -416,7 +548,7 @@ func TestEmailSetAndChanges(t *testing.T) {
 func TestChangesCoalesce(t *testing.T) {
 	s, m := fixture()
 	m.mu.Lock()
-	m.st.Seq = 5
+	m.st.Seq, m.st.Email = 5, 5
 	m.changes = append(m.changes,
 		Change{Seq: 4, Updated: map[string][]string{"Email": {idC}}},
 		Change{Seq: 5, Destroyed: map[string][]string{"Email": {idC, idB}}})
@@ -493,9 +625,9 @@ func TestMailboxQuerySetAndThreads(t *testing.T) {
 	out := run(t, s, owner, `[
 		["Mailbox/query",{"accountId":"$ACCT","filter":{"role":"inbox"}},"0"],
 		["Mailbox/query",{"accountId":"$ACCT","filter":{"hasAnyRole":false},"sort":[{"property":"sortOrder"}]},"1"],
-		["Mailbox/query",{"accountId":"$ACCT","filter":{"isSubscribed":true}},"2"],
+		["Mailbox/query",{"accountId":"$ACCT","filter":{"isSubscribed":true,"bogus":1}},"2"],
 		["Mailbox/set",{"accountId":"$ACCT","create":{"k":{"name":"x"}},"destroy":["inbox"]},"3"],
-		["Thread/get",{"accountId":"$ACCT","ids":["`+threadIDOf(idA)+`","Tzzzzzzzzzzzzzzzzzzzzzzzz","bogus"]},"4"],
+		["Thread/get",{"accountId":"$ACCT","ids":["`+"T"+idA[1:]+`","Tzzzzzzzzzzzzzzzzzzzzzzzz","bogus"]},"4"],
 		["Thread/get",{"accountId":"$ACCT","ids":null},"5"],
 		["Email/get",{"accountId":"$ACCT","ids":null,"properties":["threadId"]},"6"]]`)
 	if ids := result(t, out, 0, "Mailbox/query")["ids"].([]any); len(ids) != 1 || ids[0] != "inbox" {
@@ -508,8 +640,8 @@ func TestMailboxQuerySetAndThreads(t *testing.T) {
 		t.Error("an unsupported Mailbox filter must fail")
 	}
 	r := result(t, out, 3, "Mailbox/set")
-	if r["notCreated"].(map[string]any)["k"] == nil || r["notDestroyed"].(map[string]any)["inbox"] == nil {
-		t.Errorf("Mailbox/set must refuse each object: %v", r)
+	if r["created"].(map[string]any)["k"] == nil || r["notDestroyed"].(map[string]any)["inbox"].(map[string]any)["type"] != "forbidden" {
+		t.Errorf("Mailbox/set: %v", r)
 	}
 	th := result(t, out, 4, "Thread/get")
 	if l := th["list"].([]any); len(l) != 1 || l[0].(map[string]any)["emailIds"].([]any)[0] != idA || len(th["notFound"].([]any)) != 2 {

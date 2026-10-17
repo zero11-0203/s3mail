@@ -3,9 +3,11 @@ package jmap
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"maps"
+	"slices"
 	"strings"
+
+	"github.com/zero11-0203/s3mail/go/internal/model"
 )
 
 const maxSetAttempts = 5
@@ -22,73 +24,129 @@ func emailSet(ctx context.Context, c *call) (any, *MethodError) {
 	if err != nil {
 		return nil, c.s.fail("read state", err)
 	}
-	if a.IfInState != nil && *a.IfInState != stateToken(start) {
+	if a.IfInState != nil && !inState(*a.IfInState, start, "Email") {
 		return nil, methodErr("stateMismatch", "")
 	}
-	resp := newSetResponse(a.AccountID, start)
-	for id := range a.Create {
-		resp.NotCreated[id] = &SetError{Type: "forbidden", Description: "Email creation is not supported yet"}
-	}
-	for _, id := range a.Destroy {
-		// Destruction needs deletion markers and derived-data cleanup
-		// (docs/operations/recovery.md); until then, move to Trash.
-		resp.NotDestroyed[id] = &SetError{Type: "forbidden", Description: "Email destruction is not supported yet; move it to Trash"}
-	}
+	resp := newSetResponse(a.AccountID, stateToken(start, "Email"))
 	last := start
-	for id, patch := range a.Update {
-		st, serr := c.s.updateEmail(ctx, id, patch)
-		if serr != nil {
-			resp.NotUpdated[id] = serr
-			continue
-		}
-		resp.Updated[id] = nil
+	advance := func(st State) {
 		if st.Seq > last.Seq {
 			last = st
 		}
 	}
-	resp.NewState = stateToken(last)
+	for _, cid := range slices.Sorted(maps.Keys(a.Create)) {
+		created, st, serr := c.s.createEmail(ctx, c, a.Create[cid])
+		if serr != nil {
+			resp.NotCreated[cid] = serr
+			continue
+		}
+		advance(st)
+		c.created[cid] = created["id"].(string)
+		resp.Created[cid] = created
+	}
+	for _, rawID := range slices.Sorted(maps.Keys(a.Update)) {
+		id, ok := c.resolveID(rawID)
+		if !ok {
+			resp.NotUpdated[rawID] = &SetError{Type: "notFound"}
+			continue
+		}
+		st, serr := c.s.updateEmail(ctx, c, id, a.Update[rawID])
+		if serr != nil {
+			resp.NotUpdated[rawID] = serr
+			continue
+		}
+		advance(st)
+		resp.Updated[rawID] = nil
+	}
+	for _, rawID := range a.Destroy {
+		id, ok := c.resolveID(rawID)
+		if !ok {
+			resp.NotDestroyed[rawID] = &SetError{Type: "notFound"}
+			continue
+		}
+		st, serr := c.s.destroyEmail(ctx, id)
+		if serr != nil {
+			resp.NotDestroyed[rawID] = serr
+			continue
+		}
+		advance(st)
+		resp.Destroyed = append(resp.Destroyed, rawID)
+	}
+	resp.NewState = stateToken(last, "Email")
 	return resp, nil
 }
 
-// updateEmail applies one patch under the account sequence guard, retrying
-// from a fresh read when another commit wins.
-func (s *Server) updateEmail(ctx context.Context, id string, patch map[string]json.RawMessage) (State, *SetError) {
-	for range maxSetAttempts {
-		st, err := s.Store.State(ctx)
-		if err != nil {
-			return State{}, &SetError{Type: "serverFail"}
-		}
-		found, err := s.Store.GetEmails(ctx, uniqueValid([]string{id}))
-		if err != nil {
-			return State{}, &SetError{Type: "serverFail"}
-		}
-		before, ok := found[id]
-		if !ok {
-			return State{}, &SetError{Type: "notFound"}
-		}
-		after, serr := applyPatch(before, patch)
+func (s *Server) getEmail(ctx context.Context, id string) (EmailMeta, bool, *SetError) {
+	found, err := s.Store.GetEmails(ctx, uniqueValid([]string{id}))
+	if err != nil {
+		return EmailMeta{}, false, &SetError{Type: "serverFail"}
+	}
+	m, ok := found[id]
+	return m, ok, nil
+}
+
+// updateEmail applies one patch under the account sequence guard.
+func (s *Server) updateEmail(ctx context.Context, c *call, id string, patch map[string]json.RawMessage) (State, *SetError) {
+	return s.commitLoop(ctx, func(State) (*model.Mutation, *SetError) {
+		before, ok, serr := s.getEmail(ctx, id)
 		if serr != nil {
-			return State{}, serr
+			return nil, serr
+		}
+		if !ok {
+			return nil, &SetError{Type: "notFound"}
+		}
+		after, serr := applyPatch(c, before, patch)
+		if serr != nil {
+			return nil, serr
 		}
 		if maps.Equal(after.Keywords, before.Keywords) && maps.Equal(after.MailboxIDs, before.MailboxIDs) {
-			return st, nil
+			return nil, nil
 		}
-		err = s.Store.UpdateEmail(ctx, st, before, after)
-		if errors.Is(err, ErrStateChanged) {
-			continue
+		if serr := s.checkMailboxIDs(ctx, after.MailboxIDs); serr != nil {
+			return nil, serr
 		}
-		if err != nil {
-			s.Log.Error("jmap", "outcome", "serverFail", "step", "update email", "error", err)
-			return State{}, &SetError{Type: "serverFail"}
+		return &model.Mutation{Emails: []model.EmailChange{{Before: &before, After: &after}}}, nil
+	})
+}
+
+// destroyEmail removes the Email and its derived records and writes a
+// deletion marker; the original object is never deleted
+// (docs/operations/recovery.md#original-mail-retention).
+func (s *Server) destroyEmail(ctx context.Context, id string) (State, *SetError) {
+	return s.commitLoop(ctx, func(State) (*model.Mutation, *SetError) {
+		before, ok, serr := s.getEmail(ctx, id)
+		if serr != nil {
+			return nil, serr
 		}
-		return State{Seq: st.Seq + 1, Epoch: st.Epoch}, nil
+		if !ok {
+			return nil, &SetError{Type: "notFound"}
+		}
+		return &model.Mutation{Emails: []model.EmailChange{{Before: &before}}}, nil
+	})
+}
+
+func (s *Server) checkMailboxIDs(ctx context.Context, ids map[string]bool) *SetError {
+	if len(ids) == 0 {
+		return invalidProps("an Email must be in at least one mailbox", "mailboxIds")
 	}
-	return State{}, &SetError{Type: "serverFail", Description: "account busy; retry"}
+	if len(ids) > MaxMailboxesPerEmail {
+		return &SetError{Type: "tooManyMailboxes"}
+	}
+	for id := range ids {
+		ok, err := s.mailboxExists(ctx, id)
+		if err != nil {
+			return &SetError{Type: "serverFail"}
+		}
+		if !ok {
+			return invalidProps("no mailbox "+id, "mailboxIds")
+		}
+	}
+	return nil
 }
 
 // applyPatch applies a PatchObject to the mutable Email properties:
 // keywords and mailboxIds (RFC 8620 §5.3, RFC 8621 §4.6).
-func applyPatch(m EmailMeta, patch map[string]json.RawMessage) (EmailMeta, *SetError) {
+func applyPatch(c *call, m EmailMeta, patch map[string]json.RawMessage) (EmailMeta, *SetError) {
 	out := m
 	out.Keywords = maps.Clone(m.Keywords)
 	out.MailboxIDs = maps.Clone(m.MailboxIDs)
@@ -151,7 +209,7 @@ func applyPatch(m EmailMeta, patch map[string]json.RawMessage) (EmailMeta, *SetE
 				if !v {
 					return m, invalid(path, "mailboxIds values must be true")
 				}
-				out.MailboxIDs[id] = true
+				out.MailboxIDs[resolveMailbox(c, id)] = true
 			}
 		case root == "mailboxIds" && strings.Contains(key, "/"):
 			return m, &SetError{Type: "invalidPatch", Description: "nested mailbox path"}
@@ -161,24 +219,13 @@ func applyPatch(m EmailMeta, patch map[string]json.RawMessage) (EmailMeta, *SetE
 				return m, invalid(path, "mailboxIds values are true or null")
 			}
 			if set {
-				out.MailboxIDs[key] = true
+				out.MailboxIDs[resolveMailbox(c, key)] = true
 			} else {
-				delete(out.MailboxIDs, key)
+				delete(out.MailboxIDs, resolveMailbox(c, key))
 			}
 		default:
 			return m, invalid(root, "property is immutable or unknown")
 		}
-	}
-	for id := range out.MailboxIDs {
-		if !mailboxExists(id) {
-			return m, invalid("mailboxIds", "no mailbox "+id)
-		}
-	}
-	if len(out.MailboxIDs) == 0 {
-		return m, invalid("mailboxIds", "an Email must stay in at least one mailbox")
-	}
-	if len(out.MailboxIDs) > MaxMailboxesPerEmail {
-		return m, &SetError{Type: "tooManyMailboxes"}
 	}
 	return out, nil
 }
@@ -204,4 +251,13 @@ func validKeyword(k string) bool {
 		}
 	}
 	return true
+}
+
+// resolveMailbox maps a "#creationId" to the created Mailbox id; unknown
+// references stay as given and fail the existence check.
+func resolveMailbox(c *call, id string) string {
+	if r, ok := c.resolveID(id); ok {
+		return r
+	}
+	return id
 }

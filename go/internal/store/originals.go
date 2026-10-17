@@ -12,6 +12,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/zero11-0203/s3mail/go/internal/model"
 )
 
 // S3 is the subset of the client the original reader uses: reads only.
@@ -91,4 +93,28 @@ func totalSize(contentRange string, read int64) (int64, error) {
 		return 0, errors.New("unexpected Content-Range " + strconv.Quote(contentRange))
 	}
 	return strconv.ParseInt(total, 10, 64)
+}
+
+// MaxOriginalBytes bounds a full read: the SES S3 action stores at most
+// 40 MB per message.
+const MaxOriginalBytes = 41 << 20
+
+// Fetch reads one exact original version in full.
+func (o *Originals) Fetch(ctx context.Context, ref model.BlobRef) ([]byte, error) {
+	if ref.VersionID == "" {
+		return nil, fmt.Errorf("no version id for %s", ref.Key)
+	}
+	out, err := o.S3.GetObject(ctx, &s3.GetObjectInput{Bucket: &ref.Bucket, Key: &ref.Key, VersionId: &ref.VersionID})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = out.Body.Close() }()
+	b, err := io.ReadAll(io.LimitReader(out.Body, MaxOriginalBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxOriginalBytes {
+		return nil, fmt.Errorf("original %s exceeds %d bytes", ref.Key, MaxOriginalBytes)
+	}
+	return b, nil
 }

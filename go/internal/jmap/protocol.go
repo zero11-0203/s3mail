@@ -112,6 +112,18 @@ type call struct {
 	s    *Server
 	acct Account
 	args json.RawMessage
+	// created maps creation ids to the ids they produced in this request
+	// (RFC 8620 §5.3); it also receives the request's createdIds.
+	created map[string]string
+}
+
+// resolveID maps "#creationId" to the created object id.
+func (c *call) resolveID(id string) (string, bool) {
+	if ref, ok := strings.CutPrefix(id, "#"); ok {
+		v, found := c.created[ref]
+		return v, found
+	}
+	return id, true
 }
 
 // decode strictly unmarshals the arguments and checks accountId.
@@ -153,16 +165,20 @@ func (s *Server) Execute(ctx context.Context, acct Account, req *Request) *Respo
 		using[u] = true
 	}
 	resp := &Response{MethodResponses: []Invocation{}}
+	created := map[string]string{}
+	for k, v := range req.CreatedIDs {
+		created[k] = v
+	}
 	var done []resolved
 	for _, inv := range req.MethodCalls {
-		out := s.invoke(ctx, acct, using, inv, done)
+		out := s.invoke(ctx, acct, using, inv, done, created)
 		resp.MethodResponses = append(resp.MethodResponses, out)
 		var v any
 		_ = json.Unmarshal(out.Args, &v)
 		done = append(done, resolved{name: out.Name, callID: out.CallID, value: v})
 	}
 	if req.CreatedIDs != nil {
-		resp.CreatedIDs = req.CreatedIDs
+		resp.CreatedIDs = created
 	}
 	if st, err := s.Store.State(ctx); err == nil {
 		resp.SessionState = s.sessionState(acct, st)
@@ -175,7 +191,7 @@ type resolved struct {
 	value        any
 }
 
-func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool, inv Invocation, done []resolved) Invocation {
+func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool, inv Invocation, done []resolved, created map[string]string) Invocation {
 	fail := func(e *MethodError) Invocation {
 		b, _ := json.Marshal(e)
 		return Invocation{Name: "error", Args: b, CallID: inv.CallID}
@@ -191,7 +207,7 @@ func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool
 	if merr != nil {
 		return fail(merr)
 	}
-	result, merr := m.fn(ctx, &call{s: s, acct: acct, args: args})
+	result, merr := m.fn(ctx, &call{s: s, acct: acct, args: args, created: created})
 	if merr != nil {
 		return fail(merr)
 	}

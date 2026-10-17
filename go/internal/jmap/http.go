@@ -153,10 +153,11 @@ func (s *Server) HandleDownload(ctx context.Context, req events.APIGatewayProxyR
 	if p["accountId"] != s.publicID(acct) {
 		return notFound, nil
 	}
-	emailID, partID, ok := ParseBlobID(p["blobId"])
-	if !ok {
+	ref, ok := ParseBlobID(p["blobId"])
+	if !ok || ref.upload() {
 		return notFound, nil
 	}
+	emailID, partID := ref.Owner, ref.Part
 	found, err := s.Store.GetEmails(ctx, []string{emailID})
 	if err != nil {
 		return problemResponse(problem("serverFail", 500, "")), nil

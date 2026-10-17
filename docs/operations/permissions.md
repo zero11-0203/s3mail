@@ -18,13 +18,16 @@
 | `ConsumeIngestQueue` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-ingest` queue | — |
 | `ReadOriginalVersions` | `s3:GetObjectVersion` | `<original bucket>/inbound/*` | — |
 | `ListOriginalVersions` | `s3:ListBucketVersions` | original bucket | `s3:prefix` like `inbound/*` |
-| `CommitToOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `CommitToOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 **Exception:**
 - `WriteTraces` uses `Resource: "*"` because X-Ray accepts no resource ARNs for these actions.
 
+`Query` and `BatchGetItem` read the threading index, thread membership and mailbox/thread summaries the receipt transaction updates ([storage](../specs/storage-sync.md#dynamodb-storage-and-consistency-contract)).
+
 **Excluded:**
+- No `dynamodb:DeleteItem`: a receipt only creates records.
 - No S3 write or delete of any kind, and no SMTP or other secrets.
 - No index publication, IAM or `sts:AssumeRole`.
 - The [shared-table limitation](../specs/security.md#iam-role-requirements) applies: inside its partition the role can write any record type.

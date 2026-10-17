@@ -66,10 +66,11 @@ The mail table uses `PK = ACCOUNT#<internalAccountId>` and typed sort keys. This
 | Sort key / record | Purpose and read path |
 | --- | --- |
 | `STATE` | Account commit sequence, restore epoch, per-type state, retained-history floor and search publication metadata |
-| `EMAIL#id`, `MAILBOX#id`, `THREAD#id`, `IDENTITY#id`, `SUBMISSION#id` | Authoritative objects; strongly consistent get/batch-get, retrying unprocessed keys |
+| `EMAIL#id`, `MAILBOX#id`, `IDENTITY#id`, `SUBMISSION#id` | Authoritative objects; strongly consistent get/batch-get, retrying unprocessed keys. System mailboxes are fixed defaults that a `MAILBOX#` record only overrides |
 | `LIST#mailboxId#receivedAt#emailId` | Strongly consistent mailbox/date listing, with a stable email-id tie-breaker |
-| `MEMBER#threadId#emailId` | Thread members; stable thread ID chosen at email creation |
-| `MAILBOXTHREAD#mailboxId#threadId`, `MESSAGEID#hash#emailId` | Transactional mailbox/thread count summaries and normalized Message-ID lookup entries |
+| `MEMBER#threadId#receivedAt#emailId` | Thread members, oldest first; a Thread is exactly its members. Stable thread ID chosen at email creation |
+| `MAILBOXTHREAD#mailboxId#threadId`, `COUNT#mailboxId` | Transactional mailbox/thread count summaries and the mailbox counters derived from them |
+| `MESSAGEID#hash#emailId`, `SUBJECT#hash#emailId` | Normalized Message-ID/reference and reply base-subject lookup entries for thread assignment |
 | `CHANGE#<padded-sequence>` | Ordered durable record of changed object IDs/types, destruction and search-dirty IDs; one record per commit |
 | `VERSION#type#id#<padded-sequence>` | Retained metadata versions for supported historical query evaluation; same history floor as changes |
 | `RECEIPT#sesMessageId`, `DELETED#emailId` | Minimal durable ingestion/replay and deletion markers, independent of visible email lifetime |

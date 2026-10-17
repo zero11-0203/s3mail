@@ -55,7 +55,7 @@ func main() {
 		Source:    ingest.Source{TopicArn: env["TOPIC_ARN"], Bucket: env["BUCKET"], KeyPrefix: env["KEY_PREFIX"]},
 		Registry:  ingest.Registry{Domain: strings.ToLower(env["DOMAIN"]), Aliases: aliases},
 		Originals: &store.Originals{S3: s3.NewFromConfig(cfg), Log: base},
-		Store:     &store.Mail{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]},
+		Store:     &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]},
 	}
 	lambda.Start(func(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
 		inv := h

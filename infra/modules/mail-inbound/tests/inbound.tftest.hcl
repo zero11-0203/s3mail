@@ -209,6 +209,14 @@ run "ingest_role_is_least_privilege" {
   }
 
   assert {
+    condition = alltrue([
+      for st in jsondecode(aws_iam_role_policy.ingest.policy).Statement :
+      !contains(flatten([st.Action]), "dynamodb:DeleteItem")
+    ])
+    error_message = "ingestion creates records and never deletes them"
+  }
+
+  assert {
     condition     = aws_lambda_event_source_mapping.ingest.function_name == aws_lambda_alias.ingest_live.arn
     error_message = "the queue triggers the live alias"
   }

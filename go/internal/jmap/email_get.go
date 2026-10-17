@@ -178,7 +178,7 @@ func emailGet(ctx context.Context, c *call) (any, *MethodError) {
 	needRaw := slices.ContainsFunc(props, func(p string) bool {
 		return !slices.Contains(metadataProperties, p)
 	})
-	resp := getResponse{AccountID: a.AccountID, State: stateToken(st), List: []map[string]any{}, NotFound: []string{}}
+	resp := getResponse{AccountID: a.AccountID, State: stateToken(st, "Email"), List: []map[string]any{}, NotFound: []string{}}
 	objs := make([]map[string]any, len(ids))
 	var mu sync.Mutex
 	var firstErr error

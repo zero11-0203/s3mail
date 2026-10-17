@@ -333,7 +333,7 @@ resource "aws_iam_role_policy" "ingest" {
       {
         Sid      = "CommitToOwnAccountPartition"
         Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:BatchGetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = var.table_arn
         Condition = {
           "ForAllValues:StringEquals" = { "dynamodb:LeadingKeys" = [var.account_partition] }
