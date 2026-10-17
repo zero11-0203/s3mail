@@ -69,6 +69,7 @@ infra/
   bootstrap/      State bucket, GitHub OIDC provider, CI roles and permissions boundary, artifact bucket (applied by hand)
   main/           Core modules and the Phase 4 webmail registration
   webmail/        Phase 4 webmail hosting, applied separately with its own state
+  agent/          Later mail agent on AgentCore, applied separately with its own state
 go/
   cmd/            Lambda entry points (ingest, dispatch, index, search, jmap, push, submit, bounce, maintenance, canary) and mail-auth/mail-admin CLIs
   internal/       JMAP protocol, MIME parsing, storage, search index and text segmentation, relay interface and adapters (smtp, fake)
@@ -77,6 +78,7 @@ docs/             Architecture, roadmap, topic specs, operations guides
 README.md         Project overview; docs/README.md is the documentation index
 AGENTS.md         Coding-task routing and repository guidance
 webmail/          Phase 4: upstream/adapter version locks, Lambda Dockerfile and browser acceptance fixtures
+agent/            Later: Python LangGraph agent, its Dockerfile, synthetic mailbox and evaluation sets
 ```
 
 ### Webmail deployment
@@ -145,7 +147,7 @@ flowchart LR
 - **CLI releases:** `goreleaser` on version tags publishes `mail-auth` binaries for macOS and Linux to GitHub Releases.
 - **Drift:** there is no scheduled drift check. Every deployment plan shows drift from manual changes; fork PRs run offline checks. Deployment plans are applied only after the destructive-change check.
 
-A later AI agent project would add its own build, test and evaluation jobs to this pipeline.
+The later [mail agent](../specs/agent.md#deployment-and-operations) adds its own build, test and evaluation jobs to this pipeline.
 
 ### Steps outside normal Terraform provisioning
 

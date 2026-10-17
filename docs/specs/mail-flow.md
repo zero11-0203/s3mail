@@ -45,7 +45,7 @@ Important implementation details:
 - Configure retries, a dead-letter queue, and idempotent ingestion: events may be delivered more than once (see [durable receipt/outbox handling](storage-sync.md#idempotency-and-durable-work)).
 - Parse MIME parts, attachments, subject, sender, dates and message identifiers, retaining both message headers and SMTP envelope metadata. Decode all text to UTF-8 from its declared charset and record the detected language.
 - Resolve aliases against the registry, apply the disposition policy below, and commit metadata, receipt marker, JMAP state and outbox work in the [storage transaction contract](storage-sync.md#dynamodb-storage-and-consistency-contract).
-- Publish an `EmailReceived` event (account id, email id, mailbox ids and stable event id; no content) through the committed outbox after successful ingestion. Nothing consumes it initially; it is the later automation hook ([future extensions](../architecture.md#future-extension-points)).
+- Publish an `EmailReceived` event (account id, email id, mailbox ids and stable event id; no content) through the committed outbox after successful ingestion. Nothing consumes it initially; from agent phase A1 the [mail agent](agent.md) triggers triage from it ([future extensions](../architecture.md#future-extension-points)).
 
 ### Recipient and processing policy
 

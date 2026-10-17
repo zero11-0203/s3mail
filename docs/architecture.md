@@ -18,11 +18,11 @@ The initial system receives and sends custom-domain mail, supports multiple alia
 
 Initial non-goals are multi-user hosting, a custom client or aerc fork, IMAP/SMTP submission compatibility, password/Basic/app-password authentication on mail endpoints, CalDAV/CardDAV and AI features. An IMAP gateway is a possible later extension.
 
-As a public portfolio project, the interoperable JMAP server is deliberately built in Go. Go covers the backend and terminal helpers; AWS provides managed transport, storage and compute; Terraform demonstrates repeatable provisioning. Tests, CI, a readable README and short demos are part of delivery. The repository must contain no secrets, account IDs, real addresses or personal mail: examples use `example.com`, and private Terraform values stay gitignored. Python, LangGraph and Bedrock belong to the separate agent project.
+As a public portfolio project, the interoperable JMAP server is deliberately built in Go. Go covers the backend and terminal helpers; AWS provides managed transport, storage and compute; Terraform demonstrates repeatable provisioning. Tests, CI, a readable README and short demos are part of delivery. The repository must contain no secrets, account IDs, real addresses or personal mail: examples use `example.com`, and private Terraform values stay gitignored. Python, LangGraph and Bedrock are used only by the later, separately deployed [mail agent](specs/agent.md).
 
 ## Components and data flow
 
-![AWS mail-system architecture: CLI-first mail paths and deferred Phase 4 webmail](diagrams/aws-mail-system.drawio.svg)
+![AWS mail-system architecture: CLI-first mail paths, deferred Phase 4 webmail and the later mail agent](diagrams/aws-mail-system.drawio.svg)
 
 [Open the editable AWS diagram](diagrams/aws-mail-system.drawio.svg) · [Editing and maintenance](diagrams/README.md)
 
@@ -47,12 +47,13 @@ A single indexer publishes coherent SQLite FTS5 snapshots in S3; a separate sear
 | aerc + mail-auth; later Next.js webmail | [Client compatibility and display safety](specs/clients.md) |
 | Terraform + Route 53 | [Provisioning, DNS and release workflow](operations/deployment.md) |
 | GC/work-recovery jobs; CloudWatch/X-Ray | [Recovery](operations/recovery.md) and [monitoring](operations/monitoring.md) |
+| Later: LangGraph agent on AgentCore Runtime | [JMAP-only access, approvals, agent stores and phase gates](specs/agent.md) |
 
-All mail backend Lambdas and terminal helpers use Go. Only the later upstream webmail uses its own Node.js server through Web Adapter. SMTP2GO is the planned first outbound adapter; SES is receiving-only. Phase 0 selects and verifies the receiving region and pinned runtime/provider/client versions. Phase 4 separately validates webmail packaging.
+All mail backend Lambdas and terminal helpers use Go. Only the later upstream webmail uses its own Node.js server through Web Adapter, and the later agent uses Python. SMTP2GO is the planned first outbound adapter; SES is receiving-only. Phase 0 selects and verifies the receiving region and pinned runtime/provider/client versions. Phase 4 separately validates webmail packaging.
 
 ## Future extension points
 
-A separate AI agent project may follow later; it is outside this repository's scope. Its prerequisites are ordinary interfaces: OAuth app registration and per-method scopes, JMAP capability discovery/dispatch, single-writer index extensibility and content-free `EmailReceived` events through the outbox. The agent accesses mail through JMAP and holds no authoritative mail data. Neither initial mail operation nor the agent prerequisite depends on deploying browser webmail.
+An optional [mail agent](specs/agent.md) follows after Phase 3 cutover. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately, and the mail system never depends on it. Its prerequisites are ordinary interfaces: OAuth app registration and per-method scopes, JMAP capability discovery/dispatch, single-writer index extensibility and content-free `EmailReceived` events through the outbox. The agent accesses mail only through JMAP, has no IAM access to mail storage and holds no authoritative mail data. Neither initial mail operation nor the agent prerequisite depends on deploying browser webmail.
 
 ## Design principles
 

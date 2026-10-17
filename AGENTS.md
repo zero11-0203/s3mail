@@ -24,6 +24,7 @@ Read the relevant owning document and its acceptance checks before making change
 | Retention, GC, rebuilds, owner recovery | `docs/operations/recovery.md` |
 | Logs, metrics, alarms, tracing, budgets | `docs/operations/monitoring.md` |
 | Stages, cutover prerequisites, release gates | `docs/roadmap.md` |
+| Mail agent: LangGraph, AgentCore, agent tools and evals | `docs/specs/agent.md` |
 | AWS architecture diagram and editing workflow | `docs/diagrams/README.md` |
 
 ## Scope and priorities
@@ -32,8 +33,9 @@ Read the relevant owning document and its acceptance checks before making change
 - Browser webmail is lower priority, deferred to Phase 4.
 - Browser-only checks do not block core Phases 0–3 or CLI-based cutover.
 - The later browser host is on-demand Lambda with Lambda Web Adapter.
-- A separate AI agent project is outside mail implementation/review scope
-  unless the user explicitly includes it.
+- The mail agent (`agent/`, `infra/agent/`) is optional and starts after
+  Phase 3 cutover; mail work never depends on it. Keep it a JMAP client:
+  no agent IAM access to mail storage and no agent-specific server shortcuts.
 
 ## Implementation constraints
 

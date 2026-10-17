@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Architecture](architecture.md)
 
-**Status:** Planned. No phase below is claimed complete. Core Phases 0–3 use aerc; browser webmail is lower priority and starts in Phase 4.
+**Status:** Planned. No phase below is claimed complete. Core Phases 0–3 use aerc; browser webmail is lower priority and starts in Phase 4. The optional [mail agent](#agent-phases) starts after Phase 3 cutover.
 
 ## Release gates
 
@@ -21,6 +21,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 | Positive release acceptance, nonce canary and coordinated rollback | [Deployment](operations/deployment.md#acceptance-checks) |
 | Mail-free telemetry, dashboard, budgets and tracing | [Monitoring](operations/monitoring.md#acceptance-checks) |
 | Browser image, sessions, proxy/stream limits, display safety and CLI/browser state | [Phase 4 browser gate](specs/clients.md#browser-release-gate-phase-4) |
+| Agent token path, read-only scope, cited answers, injection resistance and mail-free telemetry, then each later agent phase | [Agent](specs/agent.md#acceptance-checks) |
 
 ## Implementation phases
 
@@ -66,4 +67,28 @@ Architecture choices are made; configured implementations still need proof. Reso
 - Add WebSocket push or a larger upload path only when needed; keep limits/discovery/tests synchronized.
 - Continue security/version updates, recovery rehearsals on relevant storage changes and per-release client acceptance. The extension points in [future extensions](architecture.md#future-extension-points) already exist as ordinary capabilities/events; no agent feature is required for mail operation.
 
-The separate AI agent project can begin after the mail system's Phase 3 cutover requirements pass; its design is reviewed independently. Neither that prerequisite nor primary-mail operation depends on completing the lower-priority browser deployment.
+## Agent phases
+
+The [mail agent](specs/agent.md) is optional and lower priority. It begins after the mail system's Phase 3 cutover requirements pass; neither that prerequisite nor primary-mail operation depends on the browser deployment, and the mail system never depends on the agent. Each phase adds one class of side effect and the OAuth scope it needs, and starts only after the previous phase's [gate](specs/agent.md#acceptance-checks) passes. A0–A3 are independent of Phase 4; only webmail chat in A4 needs it.
+
+### A0 — MVP: verify the path
+
+- Prerequisite: register the agent's Cognito app client with `s3mail/mail.read` only and add it to the authorizer allowlist in `infra/main`.
+- Deploy `infra/agent` with the AgentCore runtime, Memory and Identity credential provider. Ship the `agent` CLI with `login` and `ask`, the read-only JMAP tools, citation checks and content-free tracing.
+- Build the synthetic mailbox, question and injection sets and the telemetry scan. Rehearse the kill switch. No feature has side effects.
+
+### A1 — Triage and digest
+
+- Add the EventBridge rule on `EmailReceived`, the queue, DLQ and trigger Lambda, the agent table, triage mode and the daily digest. The scope stays `mail.read`.
+
+### A2 — Drafts
+
+- Grant `mail.write`. Add reply drafts restricted to the Drafts mailbox, the digest imported as an email and owner-stated preferences in long-term memory.
+
+### A3 — Approved actions
+
+- Grant `mail.submit`. Add proposals, approval interrupts, the hash-checked executor and the send-once marker for organising actions and sending reviewed drafts, plus reply reminders.
+
+### A4 — Measured extensions
+
+- Choose from what A1–A3 show is used: semantic search through `docs_vec` and a custom JMAP capability, attachment text, the tools as an MCP server behind AgentCore Gateway, and webmail chat after Phase 4. Each ships with its own evaluation gate.

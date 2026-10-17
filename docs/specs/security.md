@@ -24,7 +24,7 @@ Use **one Cognito User Pool and one user**, with self-service registration disab
 
 ### Client registration and discovery
 
-- **One Cognito app client per client application**, each a public client using authorization code + PKCE with its own redirect URIs. Initially provision only the native/terminal app client for `mail-auth` and aerc. In Phase 4, setting `webmail_subdomain` in the main configuration registers the webmail: its app client (the s3mail scopes only, one exact `https://<host>/<locale>/auth/callback` per pinned locale, no logout URLs because Cognito publishes no OIDC end-session endpoint), its authorizer allowlist entry and its CORS origin. The webmail itself deploys separately ([deployment](../operations/deployment.md#webmail-deployment)). Cognito has no dynamic client registration, so adding a new client application is a Terraform change, not a code change.
+- **One Cognito app client per client application**, each a public client using authorization code + PKCE with its own redirect URIs. Initially provision only the native/terminal app client for `mail-auth` and aerc. In Phase 4, setting `webmail_subdomain` in the main configuration registers the webmail: its app client (the s3mail scopes only, one exact `https://<host>/<locale>/auth/callback` per pinned locale, no logout URLs because Cognito publishes no OIDC end-session endpoint), its authorizer allowlist entry and its CORS origin. The webmail itself deploys separately ([deployment](../operations/deployment.md#webmail-deployment)). Cognito has no dynamic client registration, so adding a new client application is a Terraform change, not a code change. The later [mail agent](agent.md#identity-and-authorization) registers its own app client the same way; whether it may be a confidential client for AgentCore Identity is an [open question](agent.md#open-questions), and this public-client rule holds until it is resolved here.
 - **Discovery:** publish OAuth protected resource metadata (RFC 9728) at `/.well-known/oauth-protected-resource`, naming the Cognito issuer as the authorization server, and return `WWW-Authenticate: Bearer` with a `resource_metadata` parameter on `401` responses, so clients with built-in OAuth can find the authorization server without hard-coded settings. Cognito publishes OIDC discovery at its issuer URL.
 - **Clients without built-in OAuth** can still connect if they accept a bearer token from an external command (as aerc does); `mail-auth` provides that token.
 
@@ -146,7 +146,7 @@ Example infrastructure-role trust condition:
 
 **Workflow side:** jobs that use AWS declare `permissions: id-token: write, contents: read` and call `aws-actions/configure-aws-credentials` (pinned to a commit SHA) with the role ARN. Role ARNs and the AWS region are stored as **GitHub repository variables**, not in workflow files, because account IDs must not appear in the public repository.
 
-**Later additions:** any separately approved agent infrastructure adds its required ECR/AgentCore permissions to the gated infrastructure role and boundary through bootstrap.
+**Later additions:** the [mail agent](agent.md#identity-and-authorization) adds its required ECR/AgentCore permissions to the gated infrastructure role and boundary through bootstrap, starting with A0.
 
 ## Failure handling
 

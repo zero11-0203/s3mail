@@ -15,7 +15,7 @@
 
 ## Design
 
-DynamoDB has no full-text search, so search uses a separate, rebuildable index: **one SQLite database file stored in S3** with **FTS5** (keyword search with BM25 ranking). DynamoDB and S3 remain the source of truth; the index can always be regenerated from them. The AI agent project later adds **sqlite-vec** vectors to the same file for semantic and hybrid search; the storage choice below accounts for that.
+DynamoDB has no full-text search, so search uses a separate, rebuildable index: **one SQLite database file stored in S3** with **FTS5** (keyword search with BM25 ranking). DynamoDB and S3 remain the source of truth; the index can always be regenerated from them. The [mail agent](agent.md) (phase A4) later adds **sqlite-vec** vectors to the same file for semantic and hybrid search; the storage choice below accounts for that.
 
 ### Why SQLite on S3
 
@@ -61,7 +61,7 @@ flowchart LR
 - `docs`: email id, thread id, account id, sender, recipients, subject, received date, mailbox ids, `deliveredTo` alias, has-attachment flag, language.
 - `docs_fts` (FTS5, `tokenize = "unicode61 remove_diacritics 2"`): separate From, To, Cc, Bcc, Subject and body columns, including address display names and address strings. Keep exact normalized address/header projections in `docs` for required field-specific matching and punctuation-sensitive queries; body indexing uses visible text rather than HTML tag/attribute names.
 - `meta`: generation ID, source sequence, restore epoch and schema/parser version; the source cursor travels with the database, not just its ETag.
-- Room for a `docs_vec` table keyed by email id, added by the AI agent project; the indexer's batch-and-conditional-`PUT` cycle is the single place where it will be written.
+- Room for a `docs_vec` table keyed by email id, added for the [mail agent](agent.md) in A4; the indexer's batch-and-conditional-`PUT` cycle is the single place where it will be written.
 
 ### Multilingual text
 
@@ -78,7 +78,7 @@ Mail arrives in many languages and character sets.
 - Standard `Email/query` text/address/subject/body filters combine field-scoped FTS5 and exact normalized header/address matching. `text` covers From, To, Cc, Bcc and Subject as well as visible body text. Support AND/OR/NOT combinations and declared sort semantics, not an implicit BM25-only order.
 - Text-filtered queries report `canCalculateChanges: false`; their `queryState` still incorporates the actual index generation, restore epoch, normalized filter/sort and the live metadata revision used for final filtering. Different results cannot share a state token. Expired generation states require a fresh query; offset/anchor behavior is tested across refreshes.
 - `SearchSnippet/get` returns RFC-defined highlighted strings with message text escaped and only the specified highlight markers inserted; authorization/destruction checks precede extraction. Clients still render snippets as untrusted data.
-- Semantic and hybrid search will be a custom JMAP capability added by the AI agent project.
+- Semantic and hybrid search will be a custom JMAP capability added for the [mail agent](agent.md) in A4.
 
 ### Current implementation
 

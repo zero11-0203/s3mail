@@ -21,6 +21,7 @@ Each spec owns its requirements, failure behavior and acceptance checks. Read th
 | Cognito, endpoint/method authorization, IAM and CI trust | [Security](specs/security.md) |
 | SQLite indexing, multilingual matching, retention and cost | [Search](specs/search.md) |
 | aerc, OAuth helpers, deferred webmail and display safety | [Clients](specs/clients.md) |
+| Later LangGraph/AgentCore agent, its tools, approvals and phase gates | [Mail agent](specs/agent.md) |
 
 ## Evidence
 
