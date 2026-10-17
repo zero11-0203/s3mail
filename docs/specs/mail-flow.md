@@ -110,7 +110,7 @@ Adapters:
 SMTP2GO specifics:
 
 - **Failure reporting:** SMTP2GO webhooks → dedicated gateway route requiring a rotated bearer shared secret from Secrets Manager → SQS → bounce worker. Persist before returning success. Configure the provider's supported Authorization header; see [SMTP2GO webhook configuration](https://support.smtp2go.com/hc/en-gb/articles/223087967-Webhooks). Retain failed-event redelivery and normalized per-recipient status. Correlate using a generated submission header/provider id, never just the sender-supplied Message-ID. Unverified inbound DSNs cannot by themselves change authoritative delivery status; reconcile them with relay evidence.
-- **DNS:** SMTP2GO sender-domain CNAMEs (DKIM and return path; skip link tracking), declared by the `relay-smtp2go` module and published in Route 53. The sender domain itself is added once in the SMTP2GO dashboard or API (no maintained Terraform provider assumed).
+- **DNS:** SMTP2GO sender-domain CNAMEs (DKIM, return path and the link domain SMTP2GO requires for verification; open and click tracking stay disabled in the account), declared by the `relay-smtp2go` module and published in Route 53. The sender domain itself is added once in the SMTP2GO dashboard or API (no maintained Terraform provider assumed).
 - **`Message-ID`:** require preservation in the initial SMTP2GO adapter and verify at external destinations. Generic SMTP cannot portably retrieve a relay-rewritten header. A provider that rewrites it needs a provider-specific reconciliation capability before it is supported; a relay queue ID is not a Message-ID.
 - **Tracking:** open and click tracking stay disabled for the sending user.
 
