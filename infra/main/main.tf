@@ -46,11 +46,19 @@ resource "aws_ses_domain_identity_verification" "inbound" {
   depends_on = [module.dns]
 }
 
+# Phase 4 webmail registration: its Cognito app client, authorizer
+# allowlist entry and CORS origin. The webmail itself is deployed
+# separately by infra/webmail and needs nothing else from this root.
+locals {
+  webmail_origin = var.webmail_subdomain == null ? null : "https://${var.webmail_subdomain}.${var.domain}"
+}
+
 module "auth" {
   source = "../modules/auth"
 
   domain_prefix          = var.auth_domain_prefix
   terminal_callback_urls = var.terminal_callback_urls
+  webmail_callback_urls  = local.webmail_origin == null ? [] : [for l in var.webmail_locales : "${local.webmail_origin}/${l}/auth/callback"]
 }
 
 module "jmap_api" {
@@ -61,7 +69,8 @@ module "jmap_api" {
   push_zip              = var.jmap_push_zip
   authorizer_zip        = var.authorizer_zip
   issuer                = module.auth.issuer
-  client_ids            = [module.auth.terminal_client_id]
+  client_ids            = compact([module.auth.terminal_client_id, module.auth.webmail_client_id])
+  cors_origin           = local.webmail_origin
   scopes                = module.auth.scopes
   owner_subject         = var.owner_subject
   table_name            = module.mail_store.table_name

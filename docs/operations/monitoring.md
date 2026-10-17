@@ -21,7 +21,7 @@ Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**
 
 ### Logging (CloudWatch Logs)
 
-- Go code logs structured JSON with `log/slog`; Lambda's JSON log format and application log level are set in Terraform, so verbosity changes need no code change. The later Node.js webmail's application/adapter logs must satisfy the same privacy and retention checks before it is enabled.
+- Go code logs structured JSON with `log/slog`; Lambda's JSON log format and application log level are set in Terraform, so verbosity changes need no code change. The later Node.js webmail's application/adapter logs must satisfy the same privacy and retention checks before it is enabled. Its server writes its own JSON lines at `warn` (`LOG_FORMAT`/`LOG_LEVEL`), so its function uses Lambda's text log format with 30-day retention; its separate root can add a `Component=webmail` budget.
 - Every entry carries the Lambda request id, the X-Ray trace id, the component and the outcome; JMAP calls also log method name, latency and error type. The trace id is returned to clients in a response header so a failing request can be found from the client side.
 - Each Lambda has an explicitly created log group (so Terraform owns retention) with **30-day retention**; access logs from API Gateway go to their own log group.
 - Gateway/proxy logs record route templates and request IDs, never full download paths, filenames, query strings or Authorization headers. Disable SDK wire/body debug logs and sanitize SMTP/provider error strings before logging; raw errors can contain addresses or message content.

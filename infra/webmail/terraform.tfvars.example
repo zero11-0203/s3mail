@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored) and fill in from:
+#   terraform -chdir=../main output -json webmail
+region          = "us-east-1"
+domain          = "example.com"
+subdomain       = "webmail"
+jmap_server_url = "https://abc123.execute-api.us-east-1.amazonaws.com/v1"
+oauth_issuer    = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
+oauth_client_id = "<webmail client id>"
+oauth_scopes    = ["s3mail/mail.read", "s3mail/mail.write", "s3mail/mail.submit"]
+
+# Unset on the first apply; then the digest printed by make webmail-image.
+# image_digest = "sha256:<64 hex>"
+
+# budget = { monthly_usd = 5, email = "owner@example.com" }

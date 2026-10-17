@@ -11,6 +11,11 @@ output "terminal_client_id" {
   value = aws_cognito_user_pool_client.terminal.id
 }
 
+output "webmail_client_id" {
+  description = "The Phase 4 webmail app client, or null while none is registered."
+  value       = one(aws_cognito_user_pool_client.webmail[*].id)
+}
+
 output "login_base_url" {
   description = "Base URL for /oauth2/authorize and /oauth2/token."
   value       = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${data.aws_region.current.region}.amazoncognito.com"

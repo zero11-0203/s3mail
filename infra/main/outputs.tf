@@ -30,6 +30,18 @@ output "auth" {
   }
 }
 
+output "webmail" {
+  description = "Inputs for infra/webmail (its terraform.tfvars), or null while no webmail is registered."
+  value = local.webmail_origin == null ? null : {
+    domain          = var.domain
+    subdomain       = var.webmail_subdomain
+    jmap_server_url = module.jmap_api.base_url
+    oauth_issuer    = module.auth.issuer
+    oauth_client_id = module.auth.webmail_client_id
+    oauth_scopes    = module.auth.scopes
+  }
+}
+
 output "jmap" {
   description = "JMAP endpoints for aerc and probes."
   value = {

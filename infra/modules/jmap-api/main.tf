@@ -193,6 +193,7 @@ resource "aws_lambda_function" "fn" {
       ORIGINALS_BUCKET = var.originals_bucket_name
       BLOBS_BUCKET     = aws_s3_bucket.blobs.id
       },
+      var.cors_origin == null ? {} : { CORS_ORIGIN = var.cors_origin },
       each.key == "api" && var.search_function_arn != null ? { SEARCH_FUNCTION = var.search_function_arn } : {},
       each.key == "api" && var.sending != null ? {
         DOMAIN              = var.sending.domain
@@ -416,14 +417,99 @@ resource "aws_api_gateway_gateway_response" "unauthorized" {
   response_type = "UNAUTHORIZED"
   status_code   = "401"
 
-  response_parameters = {
+  response_parameters = merge({
     "gatewayresponse.header.WWW-Authenticate" = "'Bearer resource_metadata=\"${local.metadata_url}\"'"
     "gatewayresponse.header.Cache-Control"    = "'no-store'"
-  }
+  }, local.cors_error_headers)
   # The default body, declared so plans stay clean.
   response_templates = {
     "application/json" = "{\"message\":$context.error.messageString}"
   }
+}
+
+# --- CORS for the registered webmail origin ----------------------------------
+
+# A browser can read a response only when it names the origin, so the
+# gateway's own errors (401 above, 403 deny, throttling, integration
+# failures) carry it too; otherwise webmail sees a network error instead of
+# a 401 and cannot refresh its token. Handlers add it to their responses.
+locals {
+  cors_error_headers = var.cors_origin == null ? {} : {
+    "gatewayresponse.header.Access-Control-Allow-Origin" = "'${var.cors_origin}'"
+    "gatewayresponse.header.Vary"                        = "'Origin'"
+  }
+  cors_routes = var.cors_origin == null ? {} : local.routes
+}
+
+resource "aws_api_gateway_gateway_response" "cors" {
+  for_each = var.cors_origin == null ? toset([]) : toset(["DEFAULT_4XX", "DEFAULT_5XX"])
+
+  rest_api_id         = aws_api_gateway_rest_api.this.id
+  response_type       = each.key
+  response_parameters = local.cors_error_headers
+  response_templates = {
+    "application/json" = "{\"message\":$context.error.messageString}"
+  }
+}
+
+# Preflights are answered by the gateway without the authorizer: browsers
+# send OPTIONS without credentials. No Lambda or data sits behind them.
+resource "aws_api_gateway_method" "preflight" {
+  for_each = local.cors_routes
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = each.value.resource
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "preflight" {
+  for_each = local.cors_routes
+
+  rest_api_id       = aws_api_gateway_rest_api.this.id
+  resource_id       = each.value.resource
+  http_method       = aws_api_gateway_method.preflight[each.key].http_method
+  type              = "MOCK"
+  request_templates = { "application/json" = "{\"statusCode\": 204}" }
+  # See the metadata integration: apply the template under */*.
+  content_handling = "CONVERT_TO_TEXT"
+}
+
+resource "aws_api_gateway_method_response" "preflight" {
+  for_each = local.cors_routes
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = each.value.resource
+  http_method = aws_api_gateway_method.preflight[each.key].http_method
+  status_code = "204"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Max-Age"       = true
+    "method.response.header.Vary"                         = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "preflight" {
+  for_each = local.cors_routes
+
+  rest_api_id      = aws_api_gateway_rest_api.this.id
+  resource_id      = each.value.resource
+  http_method      = aws_api_gateway_method.preflight[each.key].http_method
+  status_code      = aws_api_gateway_method_response.preflight[each.key].status_code
+  content_handling = "CONVERT_TO_TEXT"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'${var.cors_origin}'"
+    "method.response.header.Access-Control-Allow-Methods" = "'${each.value.method}, OPTIONS'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Authorization, Content-Type'"
+    "method.response.header.Access-Control-Max-Age"       = "'600'"
+    "method.response.header.Vary"                         = "'Origin'"
+  }
+
+  depends_on = [aws_api_gateway_integration.preflight]
 }
 
 # Path tree: /.well-known/{jmap,oauth-protected-resource}, /jmap,
@@ -676,6 +762,10 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_integration_response.metadata,
       aws_api_gateway_method.webhook,
       aws_api_gateway_integration.webhook,
+      aws_api_gateway_gateway_response.cors,
+      aws_api_gateway_method.preflight,
+      aws_api_gateway_integration.preflight,
+      aws_api_gateway_integration_response.preflight,
     ]))
   }
 

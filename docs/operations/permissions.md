@@ -217,6 +217,18 @@ It has no table, mail, relay-credential or other queue access; reserved concurre
 
 It has no grant on the original-mail or blob buckets, cannot read or write objects, and cannot add delete markers (`s3:DeleteObject`). DynamoDB grants cannot be narrowed by sort key, so `DeleteItem` covers the whole account partition; the code deletes only CHANGE records at or below the floor.
 
+### `s3mail-webmail` (Lambda execution role)
+
+- **Module:** `infra/modules/webmail`, applied only by the separate `infra/webmail` root (Phase 4).
+- **Purpose:** run the pinned webmail server behind Lambda Web Adapter ([browser hosting](../specs/clients.md#browser-hosting-and-client-safety)). It exchanges OAuth codes and refresh tokens with Cognito over public HTTPS; mail is reached only from the browser with the user's token.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-webmail` log group | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
+
+**Excluded:** any DynamoDB, S3, SQS, SNS, SES, Lambda invoke, Secrets Manager, ECR, IAM or `sts:AssumeRole` grant. The image is pulled by the Lambda service under the repository policy below, not by this role.
+
 ## Resource policies
 
 | Resource | Principal | Grant | Condition |
@@ -240,6 +252,8 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | `s3mail-outbound-webhook` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/POST/webhooks/smtp2go` (no gateway authorizer; the function checks the bearer secret) |
 | Delivery DLQ | — | Redrive allowed only from the delivery queue | — |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
+| `s3mail-webmail` `live` alias (Phase 4) | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<webmail api>/*/*` (no gateway authorizer; the server's own session checks protect the application) |
+| `s3mail-webmail` ECR repository (Phase 4) | `lambda.amazonaws.com` | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | `aws:sourceArn` like `arn:aws:lambda:<region>:<account>:function:s3mail-webmail*` |
 
 Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues; see [the evidence finding](../evidence/phase0-ses-receiving.md#findings).
 

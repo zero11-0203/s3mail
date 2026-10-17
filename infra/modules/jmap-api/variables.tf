@@ -118,6 +118,17 @@ variable "webhook" {
   default = null
 }
 
+variable "cors_origin" {
+  description = "The one browser origin allowed to call the API (the Phase 4 webmail, e.g. https://webmail.example.com). Null disables CORS."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.cors_origin == null || can(regex("^https://[a-z0-9.-]+$", var.cors_origin))
+    error_message = "cors_origin is an https origin: lowercase host, no port, path or trailing slash."
+  }
+}
+
 variable "push_concurrency" {
   description = "Reserved concurrency of the push function: the cap on open EventSource streams."
   type        = number

@@ -56,7 +56,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 ### Phase 4 — Lower-priority browser webmail
 
 - Once the core mail system is operational, select/pin the upstream Next.js client and Lambda Web Adapter versions. Validate stateless OAuth/PKCE/session handling, `/tmp` cache writes and cold starts using the actual Lambda container.
-- Bootstrap scoped ECR/image-deploy permissions and enable the optional Terraform webmail module. Build/push the pinned image, deploy its Lambda alias and separate gateway, and provision the domain/certificate, Cognito browser app client, session secrets and CORS registration.
+- Bootstrap scoped ECR/image-deploy permissions. Register the webmail in the main root (Cognito browser app client, authorizer allowlist, CORS origin), then build/push the pinned image and apply the separate `infra/webmail` root for its Lambda alias, gateway, domain and certificate ([webmail deployment](operations/deployment.md#webmail-deployment)). The Terraform and image build exist; none of it has been applied or validated.
 - Complete browser acceptance from [clients](specs/clients.md#design): login/refresh/logout across instances, cookie/cache safety, HTML/sandbox/privacy protections, attachments, streaming/proxy payload limits and synchronization with aerc. Activate browser access only after this component's checks pass.
 - Add the browser fixtures, image scans, budget/latency alarms and release/rollback manifest entries. aerc remains the independent CLI test and access path.
 

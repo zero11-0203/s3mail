@@ -54,6 +54,28 @@ variable "terminal_callback_urls" {
   default     = ["http://localhost:53789/callback"]
 }
 
+variable "webmail_subdomain" {
+  description = <<-EOT
+    Phase 4: the webmail host under domain (e.g. "webmail"). Setting it
+    registers the webmail Cognito app client, allowlists it in the
+    authorizer and allows its origin through CORS; infra/webmail deploys
+    the webmail itself. Null registers nothing.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.webmail_subdomain == null || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.webmail_subdomain))
+    error_message = "webmail_subdomain is one lowercase DNS label."
+  }
+}
+
+variable "webmail_locales" {
+  description = "Locales of the pinned webmail (webmail/versions.env); each has its own exact OAuth callback /<locale>/auth/callback."
+  type        = list(string)
+  default     = ["en", "de", "es", "fr", "it", "ja", "nl", "pl", "pt", "ru", "uk"]
+}
+
 variable "owner_subject" {
   description = "The owner's Cognito sub, mapped to the mail account (set in terraform.tfvars)."
   type        = string
