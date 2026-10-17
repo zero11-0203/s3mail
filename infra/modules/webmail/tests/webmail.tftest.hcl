@@ -76,7 +76,7 @@ run "function_is_bounded_oauth_only_and_streams" {
   command = apply
 
   assert {
-    condition     = aws_lambda_function.this.package_type == "Image" && aws_lambda_function.this.reserved_concurrent_executions == 4
+    condition     = aws_lambda_function.this.package_type == "Image" && aws_lambda_function.this.reserved_concurrent_executions == 20
     error_message = "the image runs with bounded concurrency"
   }
 

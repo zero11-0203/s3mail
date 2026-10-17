@@ -51,9 +51,9 @@ variable "image_digest" {
 }
 
 variable "concurrency" {
-  description = "Reserved concurrency of the webmail function."
+  description = "Reserved concurrency of the webmail function. A first page load fetches about 20 assets at once, and 4 throttled it into 503s."
   type        = number
-  default     = 4
+  default     = 20
 }
 
 variable "retained_images" {

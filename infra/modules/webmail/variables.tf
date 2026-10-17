@@ -73,9 +73,9 @@ variable "memory" {
 }
 
 variable "concurrency" {
-  description = "Reserved concurrency: the cap on simultaneous webmail requests and their cost."
+  description = "Reserved concurrency: the cap on simultaneous webmail requests and their cost. A first page load fetches about 20 assets at once, and 4 throttled it into 503s."
   type        = number
-  default     = 4
+  default     = 20
 }
 
 variable "throttle" {
