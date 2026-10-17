@@ -229,16 +229,14 @@ resource "aws_sqs_queue_redrive_allow_policy" "index_dlq" {
 }
 
 # Wake-ups are coalesced for a minute; with the one-minute schedule a new
-# Email is searchable within the six-minute target.
+# Email is searchable within the six-minute target. Reserved concurrency
+# one serializes runs (the mapping's own cap cannot go below two); a
+# throttled batch is lost at worst, and the dispatcher wakes again.
 resource "aws_lambda_event_source_mapping" "index" {
   event_source_arn                   = aws_sqs_queue.index.arn
   function_name                      = aws_lambda_alias.live["indexer"].arn
   batch_size                         = 100
   maximum_batching_window_in_seconds = 60
-
-  scaling_config {
-    maximum_concurrency = 2
-  }
 }
 
 resource "aws_cloudwatch_event_rule" "dispatch" {
