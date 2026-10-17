@@ -879,7 +879,7 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 			continue
 		}
 		advance(st)
-		resp.Updated[rawID] = nil
+		resp.Updated[id] = nil
 	}
 
 	for _, rawID := range a.Destroy {
@@ -894,7 +894,7 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 			continue
 		}
 		advance(st)
-		resp.Destroyed = append(resp.Destroyed, rawID)
+		resp.Destroyed = append(resp.Destroyed, id)
 	}
 	resp.NewState = stateToken(last, "Mailbox")
 	return resp, nil

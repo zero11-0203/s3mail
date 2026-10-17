@@ -159,3 +159,18 @@ func stateOf(t *testing.T, s *Server, typ string) string {
 	}
 	return stateToken(st, typ)
 }
+
+func TestSetReportsResolvedIDs(t *testing.T) {
+	s, _ := fixture()
+	out := run(t, s, owner, `[
+		["Mailbox/set",{"accountId":"$ACCT","create":{"p":{"name":"P"}}},"0"],
+		["Mailbox/set",{"accountId":"$ACCT","update":{"#p":{"name":"Q"}}},"1"],
+		["Mailbox/set",{"accountId":"$ACCT","destroy":["#p"]},"2"]]`)
+	id := result(t, out, 0, "Mailbox/set")["created"].(map[string]any)["p"].(map[string]any)["id"]
+	if _, ok := result(t, out, 1, "Mailbox/set")["updated"].(map[string]any)[id.(string)]; !ok {
+		t.Errorf("updated is keyed by the real id: %v", out[1])
+	}
+	if d := result(t, out, 2, "Mailbox/set")["destroyed"].([]any); len(d) != 1 || d[0] != id {
+		t.Errorf("destroyed lists the real id: %v", d)
+	}
+}
