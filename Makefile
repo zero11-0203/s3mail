@@ -74,5 +74,7 @@ webmail-image:
 	aws ecr get-login-password --region "$$region" | docker login --username AWS --password-stdin "$$registry" >/dev/null; \
 	docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
 		--build-arg UPSTREAM_IMAGE="$$UPSTREAM_IMAGE" --build-arg ADAPTER_IMAGE="$$ADAPTER_IMAGE" \
-		-t "$$tag" --push webmail; \
-	echo "image_digest = \"$$(docker buildx imagetools inspect "$$tag" --format '{{.Manifest.Digest}}')\""
+		--metadata-file webmail/.build-metadata.json -t "$$tag" --push webmail; \
+	digest="$$(grep -o '"containerimage.digest": *"sha256:[0-9a-f]*"' webmail/.build-metadata.json | grep -o 'sha256:[0-9a-f]*')"; \
+	rm -f webmail/.build-metadata.json; \
+	echo "image_digest = \"$$digest\""
