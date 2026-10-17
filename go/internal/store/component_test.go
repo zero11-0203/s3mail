@@ -334,3 +334,80 @@ func TestComponentSearchRegistration(t *testing.T) {
 		t.Errorf("after CAS %+v", got)
 	}
 }
+
+func TestComponentSubmissionRecords(t *testing.T) {
+	a := localAccount(t)
+	ctx := context.Background()
+	commit := func(m model.Mutation) (model.State, error) {
+		st, err := a.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Commit(ctx, st, m)
+	}
+	id := model.Identity{ID: model.IdentityID("me@example.com"), Email: "me@example.com", Name: "Me"}
+	if _, err := commit(model.Mutation{Identities: []model.IdentityChange{{After: &id}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := a.ListIdentities(ctx)
+	if len(got) != 1 || got[0].Email != id.Email || got[0].Name != "Me" || got[0].ID != id.ID {
+		t.Errorf("identities %+v", got)
+	}
+
+	sub := model.Submission{ID: "Sa", IdentityID: id.ID, EmailID: "Ma", ThreadID: "Ta", MailFrom: id.Email, RcptTo: []string{"x@example.net", "y@example.net"},
+		SendAt: time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC), Status: model.SubmissionQueued, Reservation: model.Reservation{Units: 2, Keys: []string{"smtp2go#day#2026-10-17"}}}
+	sub.SetRecipients("queued", "250 2.0.0 queued")
+	quota := []model.QuotaDelta{{Key: "smtp2go#day#2026-10-17", Units: 2, Limit: 3}}
+	st, err := commit(model.Mutation{Submissions: []model.SubmissionChange{{After: &sub}}, Quota: quota, Send: []string{"Sa"},
+		Attempts: []model.Attempt{{SubmissionID: "Sa", Attempt: 0, Phase: "created", At: sub.SendAt}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Submission != st.Seq || st.Identity == st.Seq {
+		t.Errorf("state %+v", st)
+	}
+	back, ok, _ := a.GetSubmission(ctx, "Sa")
+	if !ok || back.Status != model.SubmissionQueued || back.Recipients["y@example.net"].Delivered != "queued" || !back.SendAt.Equal(sub.SendAt) {
+		t.Errorf("submission %+v", back)
+	}
+	// Another reservation of two would exceed three.
+	sub2 := sub
+	sub2.ID = "Sb"
+	if _, err := commit(model.Mutation{Submissions: []model.SubmissionChange{{After: &sub2}}, Quota: quota}); !errors.Is(err, model.ErrOverQuota) {
+		t.Errorf("over quota: %v", err)
+	}
+	if _, found, _ := a.GetSubmission(ctx, "Sb"); found {
+		t.Error("the rejected commit wrote nothing")
+	}
+	// Releasing restores capacity.
+	if _, err := commit(model.Mutation{Quota: []model.QuotaDelta{{Key: quota[0].Key, Units: -2}}}); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := a.QuotaUsed(ctx, quota[0].Key); used != 0 {
+		t.Errorf("used %d", used)
+	}
+	ob, _ := a.Outbox(ctx)
+	var submit []OutboxEntry
+	for _, e := range ob {
+		if e.Destination == "submit" {
+			submit = append(submit, e)
+		}
+	}
+	if len(submit) != 1 || submit[0].IDs[0] != "Sa" {
+		t.Fatalf("outbox %+v", ob)
+	}
+	if err := a.AckOutbox(ctx, submit[0].Key); err != nil {
+		t.Fatal(err)
+	}
+	if ob, _ = a.Outbox(ctx); slices.ContainsFunc(ob, func(e OutboxEntry) bool { return e.Destination == "submit" }) {
+		t.Error("acknowledged entry remains")
+	}
+	ats, _ := a.Attempts(ctx, "Sa")
+	if len(ats) != 1 || ats[0].Phase != "created" {
+		t.Errorf("attempts %+v", ats)
+	}
+	changes, _ := a.Changes(ctx, 0, st.Seq)
+	if last := changes[len(changes)-1]; !slices.Contains(last.Created["EmailSubmission"], "Sa") {
+		t.Errorf("change %+v", last)
+	}
+}

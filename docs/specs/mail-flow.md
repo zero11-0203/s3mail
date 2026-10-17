@@ -130,6 +130,17 @@ Design rules:
 
 Receipt, change, outbox and attempt records have distinct purposes and retention. They are not replaced by one short-lived generic processed-ID cache.
 
+### Current outbound implementation
+
+What is deployed (`go/internal/send`, `go/internal/relay`, `go/internal/dispatch`, `infra/modules/mail-outbound`, `infra/modules/relay-smtp2go`) and where it is narrower than the design above:
+
+- **Frozen send material:** a submission pins the Email's exact original version (`composed/` or `imported/`); originals are never deleted, so no separate copy is written. Bcc is stripped when the worker reads it.
+- **Attempts:** queued → claimed under a random owner token and a two-minute lease → `handoff_started`, committed in the SMTP adapter immediately before `DATA` → accepted, rejected or unknown. Proven non-acceptance retries after 1, 5, 15 and 60 minutes, reusing the reservation, and becomes rejected after five attempts. Attempt records are append-only (`ATTEMPT#<submission>#<attempt>#<record>`); `mail-admin submission ID` shows them and `mail-admin resolve ID accepted|rejected|retry` appends the owner's resolution.
+- **Pause:** the `/s3mail/relay` SSM parameter must name the configured relay (`smtp2go`); it is created as `paused` and Terraform ignores later changes. Paused workers claim nothing; work recovery re-enqueues due submissions after the pause ends.
+- **Quota:** daily and monthly counters per relay (`QUOTA#smtp2go#day#…`, `…#month#…`), reserved in the creation commit, one unit per envelope recipient by default. Defaults are 200/day and 1,000/month in UTC (`relay_quota` in the root module) and still have to be verified against the SMTP2GO plan.
+- **SMTP adapter:** 587 with required STARTTLS (465 implicit TLS also accepted), verified certificates, `AUTH PLAIN`, 60-second transaction deadline.
+- **Not yet:** SMTP2GO webhooks and bounce ingestion, so `deliveryStatus` stays `queued` after relay acceptance; suppression-list handling; acceptance-unknown alarms (the worker and sweep log `outcome: acceptance_unknown`); a diagnostic attempt capability.
+
 ## Failure handling
 
 The inbound policy above distinguishes bounded-parser quarantine from transient queue retries. The outbound lease and handoff protocol above distinguishes proven non-acceptance from unknown acceptance. Owner reconciliation is required before retrying an uncertain send. [Queue configuration](../operations/deployment.md#queue-configuration) and [monitoring](../operations/monitoring.md) cover retries, DLQs and alarms.

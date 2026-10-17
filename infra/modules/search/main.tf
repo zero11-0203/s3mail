@@ -1,5 +1,5 @@
-# Text search (docs/specs/search.md#index-pipeline): a scheduled dispatcher
-# wakes a single-writer indexer through SQS; the indexer publishes SQLite
+# Text search (docs/specs/search.md#index-pipeline): the outbox dispatcher
+# (mail-outbound) wakes a single-writer indexer through SQS; the indexer publishes SQLite
 # snapshots to a versioned index bucket and registers each generation in
 # the mail table; the search function serves the JMAP API from the
 # registered generation. Each function has its own least-privilege role
@@ -53,30 +53,6 @@ locals {
           Sid      = "ConsumeWakeUps"
           Effect   = "Allow"
           Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-          Resource = aws_sqs_queue.index.arn
-        },
-      ]
-    }
-    # Reads STATE, SEARCH and CHANGE records and sends wake-ups.
-    dispatcher = {
-      zip         = var.dispatcher_zip
-      memory      = 128
-      timeout     = 30
-      storage     = 512
-      concurrency = 1
-      env         = { QUEUE_URL = aws_sqs_queue.index.url }
-      statements = [
-        {
-          Sid       = "ReadOwnAccountPartition"
-          Effect    = "Allow"
-          Action    = ["dynamodb:GetItem", "dynamodb:Query"]
-          Resource  = var.table_arn
-          Condition = local.own_partition
-        },
-        {
-          Sid      = "SendWakeUps"
-          Effect   = "Allow"
-          Action   = "sqs:SendMessage"
           Resource = aws_sqs_queue.index.arn
         },
       ]
@@ -199,7 +175,7 @@ resource "aws_lambda_alias" "live" {
 # --- Wake-ups ----------------------------------------------------------------
 
 # Wake-ups carry no source progress, so a dead-lettered one loses nothing:
-# the next dispatch wakes the indexer again.
+# the next dispatch sweep wakes the indexer again.
 resource "aws_sqs_queue" "index_dlq" {
   name                      = "${var.name}-index-dlq"
   message_retention_seconds = 1209600
@@ -228,34 +204,16 @@ resource "aws_sqs_queue_redrive_allow_policy" "index_dlq" {
   })
 }
 
-# Wake-ups are coalesced for a minute; with the one-minute schedule a new
-# Email is searchable within the six-minute target. Reserved concurrency
-# one serializes runs (the mapping's own cap cannot go below two); a
-# throttled batch is lost at worst, and the dispatcher wakes again.
+# Wake-ups are coalesced for a minute; the stream-triggered dispatcher
+# sends them within seconds of a commit, so a new Email is searchable well
+# within the six-minute target. Reserved concurrency one serializes runs
+# (the mapping's own cap cannot go below two); a throttled batch is lost
+# at worst, and the dispatcher's sweep wakes again.
 resource "aws_lambda_event_source_mapping" "index" {
   event_source_arn                   = aws_sqs_queue.index.arn
   function_name                      = aws_lambda_alias.live["indexer"].arn
   batch_size                         = 100
   maximum_batching_window_in_seconds = 60
-}
-
-resource "aws_cloudwatch_event_rule" "dispatch" {
-  name                = "${var.name}-search-dispatch"
-  schedule_expression = var.dispatch_schedule
-}
-
-resource "aws_cloudwatch_event_target" "dispatch" {
-  rule = aws_cloudwatch_event_rule.dispatch.name
-  arn  = aws_lambda_alias.live["dispatcher"].arn
-}
-
-resource "aws_lambda_permission" "dispatch" {
-  statement_id  = "AllowSchedule"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.fn["dispatcher"].function_name
-  qualifier     = aws_lambda_alias.live["dispatcher"].name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.dispatch.arn
 }
 
 # --- Index bucket ------------------------------------------------------------

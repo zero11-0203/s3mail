@@ -8,11 +8,12 @@
 
 | Item | Value |
 | --- | --- |
-| Capabilities | `urn:ietf:params:jmap:core`, `urn:ietf:params:jmap:mail`. No submission, WebSocket or custom capability yet |
+| Capabilities | `urn:ietf:params:jmap:core`, `urn:ietf:params:jmap:mail`, and `urn:ietf:params:jmap:submission` when sending is configured (`SEND_ALIASES`). No WebSocket or custom capability yet |
+| Submission limits | `maxDelayedSend` 0; `submissionExtensions` empty; 100 envelope recipients; 20 MiB message |
 | Core limits | `maxSizeUpload` 4,194,304; `maxConcurrentUpload` 4; `maxSizeRequest` 1,048,576; `maxConcurrentRequests` 4; `maxCallsInRequest` 16; `maxObjectsInGet` 64; `maxObjectsInSet` 16 |
 | Mail limits | `maxMailboxesPerEmail` 8; `maxMailboxDepth` 10; `maxSizeMailboxName` 255; `maxSizeAttachmentsPerEmail` 20 MiB; `mayCreateTopLevelMailbox` true |
 | Account id | `A` + base32 of a hash of the internal account and restore epoch: a restored account gets a new id (RFC 8620 §1.6.2) |
-| State tokens | `<epoch>-<seq>`, where `seq` is the last commit that changed the type (STATE `emailState`, `mailboxState`, `threadState`); `/changes` pages end at commit boundaries; a foreign epoch or future sequence is `cannotCalculateChanges` |
+| State tokens | `<epoch>-<seq>`, where `seq` is the last commit that changed the type (STATE `emailState`, `mailboxState`, `threadState`, `identityState`, `submissionState`); `/changes` pages end at commit boundaries; a foreign epoch or future sequence is `cannotCalculateChanges` |
 | Query states | `q<epoch>-<seq>-<hash>`, where the hash covers the normalized filter, sort and query options; another query's state is `cannotCalculateChanges` |
 | `uploadUrl` | `POST /upload/{accountId}`; see [blobs](#blobs-and-push) |
 
@@ -50,15 +51,23 @@ Scope is the minimum wire scope; a call without it is `forbidden`. All calls are
 | `Email/copy` | 8621 §4.7 | write | Single account: the same account is `invalidArguments`, any other `fromAccountNotFound` | — | `TestCopyMethods` |
 | `Blob/copy` | 8620 §6.3 | write | As `Email/copy` | — | `TestCopyMethods` |
 | `SearchSnippet/get` | 8621 §5.1 | read | Unknown or destroyed ids are `notFound` before any text is read; `subject` and `preview` are HTML-escaped with only `<mark>` inserted, null without a match | Terms come from `text`, `body` and `subject` conditions, including negated ones | `TestTextQueryAndSnippets` |
+| `Identity/get` | 8621 §6.1 | read | One identity per declared sending alias (the receiving aliases minus the canary), reconciled with the registry by a guarded commit on each Identity or submission call; deterministic ids; `mayDelete` false | — | `TestIdentities` (`submission_test.go`) |
+| `Identity/changes` | 8621 §6.2 | read | Created/destroyed by alias changes, updated by `Identity/set` | — | `TestIdentities` |
+| `Identity/set` | 8621 §6.3 | write | `ifInState`; update `name`, `replyTo`, `bcc`, `textSignature`, `htmlSignature` (bounded sizes, valid addresses); `email` is immutable; create and destroy are `forbidden` because identities follow the alias declaration | — | `TestIdentities` |
+| `EmailSubmission/get` | 8621 §7.1 | read | All properties; `undoStatus` from the send state (pending while queued or claimed before handoff); `deliveryStatus` per envelope recipient: `queued` until relay acceptance is final and while accepted, `no` after rejection or cancellation, `unknown` after uncertain acceptance; `displayed` always `unknown`; `dsnBlobIds`/`mdnBlobIds` empty; destroyed submissions are hidden; `ids: null` beyond 64 is `requestTooLarge` | Relay delivery reports (`yes`/`no` after acceptance) await bounce ingestion | `TestAercSendFlow` |
+| `EmailSubmission/changes` | 8621 §7.2 | read | Created, updated (every send-state change) and destroyed | — | `TestAercSendFlow` |
+| `EmailSubmission/query` | 8621 §7.3 | read | Filters `identityIds`, `emailIds`, `threadIds`, `undoStatus`, `before`, `after` and operators; sorts `emailId`, `threadId`, `sentAt` | — | `TestAercSendFlow`, `TestSubmissionCancelAfterHandoffAndQueryChanges` |
+| `EmailSubmission/queryChanges` | 8621 §7.4 | read | Every submission changed since the query state is removed and, if still a result, re-added | — | `TestSubmissionCancelAfterHandoffAndQueryChanges` |
+| `EmailSubmission/set` | 8621 §7.5 | submit (+ write for hooks) | `ifInState`; create with `identityId`, `emailId` (creation references allowed) and an optional envelope; `From` (and `Sender`) must be exactly the identity, `MAIL FROM` must be the identity, no SMTP parameters; without an envelope the recipients are To/Cc/Bcc; one Message-ID and a Date are required. The commit holds the submission (pinning the Email's exact original version), the daily and monthly quota reservation, the first attempt record and the dispatch outbox. Errors: `invalidProperties` (unknown identity or Email, server-set properties including `sendAt`), `forbiddenFrom`, `forbiddenMailFrom`, `invalidEmail`, `noRecipients`, `invalidRecipients`, `tooManyRecipients`, `tooLarge`, `overQuota`. Update `undoStatus: canceled` before handoff (else `cannotUnsend`), releasing the quota; destroy hides the submission without canceling it. `onSuccessUpdateEmail`/`onSuccessDestroyEmail` run as an implicit `Email/set` response with the same call id and need the write scope, checked before anything is created | — | `TestAercSendFlow`, `TestSubmissionCreateWithComposedEmail`, `TestSubmissionCreateErrors` |
 
-Not advertised or served yet: `Identity/*`, `EmailSubmission/*`, `VacationResponse/*`.
+Not advertised or served yet: `VacationResponse/*`.
 
 ## Blobs and push
 
 | Route | Behavior | Test |
 | --- | --- | --- |
 | `GET /download/{accountId}/{blobId}/{name}` | Raw message (`G…`) or part (`P…-<path>`) of a live Email, or an unexpired upload (`U…`) or part of an uploaded message (`V…-<path>`), in the caller's account; a path such as `2.1` descends into attached messages; anything else 404. Always `attachment` disposition with an RFC 8187 filename, `nosniff`, `Content-Security-Policy: sandbox`, `no-store` | `TestDownload` |
-| `GET /eventsource` (RFC 8620 §7.3) | `types` (`*` or Email, Mailbox, Thread), `closeafter`, `ping` up to 300 s; polls STATE every 3 s; comment keepalive after 60 s quiet; ends at token expiry, 14 min 30 s, or 15 s before the Lambda deadline | `TestEventSource` |
+| `GET /eventsource` (RFC 8620 §7.3) | `types` (`*` or Email, Mailbox, Thread, Identity, EmailSubmission), `closeafter`, `ping` up to 300 s; polls STATE every 3 s; comment keepalive after 60 s quiet; ends at token expiry, 14 min 30 s, or 15 s before the Lambda deadline | `TestEventSource` |
 | `POST /upload/{accountId}` (RFC 8620 §6.1) | `mail.write`; at most `maxSizeUpload` (413 `limit` problem); the body reaches Lambda base64-encoded (`binary_media_types` `*/*`); stored in the disposable blob bucket with a BLOB record; usable for 24 hours, then 404/`blobNotFound` | `TestUploadImportParseAndDownload`, `TestUploadLimitsAndScope` |
 
 Push connection leases ([JMAP push](jmap.md#push)) are not implemented; the push function's reserved concurrency (4) caps open streams instead.

@@ -17,11 +17,13 @@ import (
 // epoch and, per data type, the sequence of the last commit that changed
 // that type. A type's state may advance conservatively.
 type State struct {
-	Seq     int64
-	Epoch   int64
-	Email   int64
-	Mailbox int64
-	Thread  int64
+	Seq        int64
+	Epoch      int64
+	Email      int64
+	Mailbox    int64
+	Thread     int64
+	Identity   int64
+	Submission int64
 }
 
 // Of returns the state sequence of one JMAP data type.
@@ -33,6 +35,10 @@ func (s State) Of(typ string) int64 {
 		return s.Mailbox
 	case "Thread":
 		return s.Thread
+	case "Identity":
+		return s.Identity
+	case "EmailSubmission":
+		return s.Submission
 	}
 	return s.Seq
 }
@@ -255,13 +261,48 @@ type EmailChange struct{ Before, After *Email }
 // Before may be a system default that has no stored record yet.
 type MailboxChange struct{ Before, After *Mailbox }
 
+// IdentityChange is a create, destroy or update of a stored identity.
+type IdentityChange struct{ Before, After *Identity }
+
+// SubmissionChange is a create or update of a submission; submissions are
+// never deleted, a destroyed one is only hidden from JMAP.
+type SubmissionChange struct{ Before, After *Submission }
+
+// QuotaDelta adds Units to one relay quota counter. A positive delta is a
+// reservation and fails the commit with ErrOverQuota when the counter
+// would exceed Limit; a negative delta releases a reservation.
+type QuotaDelta struct {
+	Key   string
+	Units int64
+	Limit int64
+}
+
+// Attempt is one appended record of a submission attempt's history
+// (docs/specs/mail-flow.md#outbound-email); records are never rewritten.
+type Attempt struct {
+	SubmissionID string
+	Attempt      int
+	Seq          int // record number within the attempt
+	Phase        string
+	Owner        string
+	At           time.Time
+	Detail       string
+}
+
 // Mutation is one guarded commit.
 type Mutation struct {
-	Emails    []EmailChange
-	Mailboxes []MailboxChange
-	Receipt   *Receipt
-	Uploads   []Upload
-	Events    []Event
+	Emails      []EmailChange
+	Mailboxes   []MailboxChange
+	Identities  []IdentityChange
+	Submissions []SubmissionChange
+	Quota       []QuotaDelta
+	Attempts    []Attempt
+	// Send lists submissions to hand to the submission queue through the
+	// outbox.
+	Send    []string
+	Receipt *Receipt
+	Uploads []Upload
+	Events  []Event
 	// Search registers a published index; it advances the Email state so
 	// clients rerun text queries, without making anything search-dirty.
 	Search *SearchRegistration
@@ -277,6 +318,8 @@ var (
 	ErrDuplicateReceipt = errors.New("receipt already committed")
 	// ErrTooLarge means the commit exceeds the transaction limits.
 	ErrTooLarge = errors.New("commit exceeds the transaction limits")
+	// ErrOverQuota means a quota reservation would exceed its limit.
+	ErrOverQuota = errors.New("relay quota exhausted")
 )
 
 var idEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)

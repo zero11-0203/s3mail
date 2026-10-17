@@ -35,7 +35,7 @@ func (a *Account) State(ctx context.Context) (model.State, error) {
 	if v, ok := num(out.Item["epoch"]); ok {
 		st.Epoch = v
 	}
-	st.Email, st.Mailbox, st.Thread = st.Seq, st.Seq, st.Seq
+	st.Email, st.Mailbox, st.Thread, st.Identity, st.Submission = st.Seq, st.Seq, st.Seq, st.Seq, st.Seq
 	if v, ok := num(out.Item["emailState"]); ok {
 		st.Email = v
 	}
@@ -44,6 +44,12 @@ func (a *Account) State(ctx context.Context) (model.State, error) {
 	}
 	if v, ok := num(out.Item["threadState"]); ok {
 		st.Thread = v
+	}
+	if v, ok := num(out.Item["identityState"]); ok {
+		st.Identity = v
+	}
+	if v, ok := num(out.Item["submissionState"]); ok {
+		st.Submission = v
 	}
 	return st, nil
 }

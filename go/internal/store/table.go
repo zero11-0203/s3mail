@@ -4,7 +4,7 @@
 //
 // Record layout under PK = ACCOUNT#<account>:
 //
-//	STATE                              seq, epoch, emailState, mailboxState, threadState
+//	STATE                              seq, epoch and the per-type states
 //	EMAIL#<emailId>                    Email metadata
 //	LIST#<mailbox>#<receivedAt>#<id>   mailbox listing
 //	MEMBER#<thread>#<receivedAt>#<id>  thread membership, oldest first
@@ -19,6 +19,10 @@
 //	CHANGE#<seq>                       change record
 //	OUTBOX#<seq>#<destination>         committed dispatch work
 //	SEARCH                             registered search index generation
+//	IDENTITY#<id>                      sending identity (owner-editable properties)
+//	SUBMISSION#<id>                    EmailSubmission with its send state
+//	ATTEMPT#<submission>#<n>#<k>       appended attempt history
+//	QUOTA#<relay>#<period>             relay quota counter
 package store
 
 import (

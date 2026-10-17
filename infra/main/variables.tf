@@ -89,10 +89,47 @@ variable "search_indexer_zip" {
   default     = "../../go/build/search-indexer/bootstrap.zip"
 }
 
-variable "search_dispatcher_zip" {
-  description = "Path to the search-dispatcher Lambda zip built by make build."
+variable "outbox_dispatcher_zip" {
+  description = "Path to the outbox-dispatcher Lambda zip built by make build."
   type        = string
-  default     = "../../go/build/search-dispatcher/bootstrap.zip"
+  default     = "../../go/build/outbox-dispatcher/bootstrap.zip"
+}
+
+variable "submission_worker_zip" {
+  description = "Path to the submission-worker Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/submission-worker/bootstrap.zip"
+}
+
+variable "submission_recovery_zip" {
+  description = "Path to the submission-recovery Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/submission-recovery/bootstrap.zip"
+}
+
+variable "smtp2go_cnames" {
+  description = "SMTP2GO sender-domain CNAMEs (DKIM and return path) from its dashboard (set in terraform.tfvars)."
+  type = list(object({
+    name    = string
+    target  = string
+    purpose = string
+  }))
+  default = []
+}
+
+variable "relay_quota" {
+  description = <<-EOT
+    The relay's sending caps, reserved atomically per submission. Defaults
+    are SMTP2GO's free plan; verify the plan's limits, recipient accounting
+    and reset timezone (docs/specs/mail-flow.md#outbound-relay-interface).
+  EOT
+  type = object({
+    daily         = number
+    monthly       = number
+    per_recipient = bool
+    timezone      = string
+  })
+  default = { daily = 200, monthly = 1000, per_recipient = true, timezone = "UTC" }
 }
 
 variable "search_zip" {

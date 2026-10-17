@@ -30,7 +30,7 @@ type Effects struct {
 	Counts map[string]Counts
 	Change Change
 	// The data types whose state advances.
-	Email, Mailbox, Thread bool
+	Email, Mailbox, Thread, Identity, Submission bool
 	// SearchDirty lists Emails the index must re-read.
 	SearchDirty []string
 }
@@ -198,6 +198,34 @@ func Plan(m Mutation, d Derived) Effects {
 		ef.Change.Updated["MailboxCounts"] = countOnly
 	}
 	ef.Mailbox = len(m.Mailboxes) > 0 || len(ef.Counts) > 0
+
+	for _, c := range m.Identities {
+		switch {
+		case c.Before == nil:
+			note(ef.Change.Created, "Identity", c.After.ID)
+		case c.After == nil:
+			note(ef.Change.Destroyed, "Identity", c.Before.ID)
+		default:
+			note(ef.Change.Updated, "Identity", c.After.ID)
+		}
+	}
+	ef.Identity = len(m.Identities) > 0
+	// A hidden (destroyed) submission's send state still changes, but
+	// nothing JMAP-visible does.
+	for _, c := range m.Submissions {
+		switch {
+		case c.Before == nil:
+			if !c.After.Destroyed {
+				note(ef.Change.Created, "EmailSubmission", c.After.ID)
+			}
+		case c.Before.Destroyed:
+		case c.After.Destroyed:
+			note(ef.Change.Destroyed, "EmailSubmission", c.After.ID)
+		default:
+			note(ef.Change.Updated, "EmailSubmission", c.After.ID)
+		}
+	}
+	ef.Submission = len(ef.Change.Created["EmailSubmission"])+len(ef.Change.Updated["EmailSubmission"])+len(ef.Change.Destroyed["EmailSubmission"]) > 0
 	for _, list := range []map[string][]string{ef.Change.Created, ef.Change.Updated, ef.Change.Destroyed} {
 		for k, v := range list {
 			if len(v) == 0 {
@@ -227,6 +255,12 @@ func (ef Effects) Next(prev State) State {
 	}
 	if ef.Thread {
 		next.Thread = next.Seq
+	}
+	if ef.Identity {
+		next.Identity = next.Seq
+	}
+	if ef.Submission {
+		next.Submission = next.Seq
 	}
 	return next
 }

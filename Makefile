@@ -45,7 +45,7 @@ secrets:
 
 # Lambda zips: linux/arm64 bootstrap binaries, zipped with a fixed
 # timestamp so unchanged code gives an unchanged zip hash.
-LAMBDAS := ingest authorizer jmap-api jmap-download jmap-push search-indexer search-dispatcher search
+LAMBDAS := ingest authorizer jmap-api jmap-download jmap-push search-indexer search outbox-dispatcher submission-worker submission-recovery
 # Phase 0 streaming spike (spike function and bearer-token authorizer).
 SPIKE_LAMBDAS := spike-stream authorizer
 

@@ -9,11 +9,6 @@ variable "indexer_zip" {
   type        = string
 }
 
-variable "dispatcher_zip" {
-  description = "Path to the search-dispatcher Lambda zip (make build)."
-  type        = string
-}
-
 variable "search_zip" {
   description = "Path to the search Lambda zip (make build)."
   type        = string
@@ -40,12 +35,6 @@ variable "account_partition" {
 variable "originals_bucket_arn" {
   description = "Permanent original-mail bucket; the indexer reads exact versions under every prefix."
   type        = string
-}
-
-variable "dispatch_schedule" {
-  description = "How often the dispatcher checks for unindexed changes."
-  type        = string
-  default     = "rate(1 minute)"
 }
 
 variable "log_retention_days" {

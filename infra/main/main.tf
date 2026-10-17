@@ -20,7 +20,7 @@ module "dns" {
   source = "../modules/dns"
 
   zone_name = var.domain
-  records   = module.mail_inbound.dns_records
+  records   = concat(module.mail_inbound.dns_records, module.relay_smtp2go.dns_records)
 }
 
 module "mail_store" {
@@ -72,17 +72,49 @@ module "jmap_api" {
   originals_bucket_arn  = module.mail_inbound.originals_bucket_arn
   ses_key_prefix        = module.mail_inbound.ses_key_prefix
   search_function_arn   = module.search.search_function_arn
+  sending = {
+    domain        = var.domain
+    aliases       = [for a in var.mail_aliases : a if a != "canary"]
+    relay         = module.relay_smtp2go.relay.name
+    daily         = var.relay_quota.daily
+    monthly       = var.relay_quota.monthly
+    per_recipient = var.relay_quota.per_recipient
+    timezone      = var.relay_quota.timezone
+  }
 }
 
 module "search" {
   source = "../modules/search"
 
   indexer_zip          = var.search_indexer_zip
-  dispatcher_zip       = var.search_dispatcher_zip
   search_zip           = var.search_zip
   table_name           = module.mail_store.table_name
   table_arn            = module.mail_store.table_arn
   account_id           = module.mail_store.account_id
   account_partition    = module.mail_store.account_partition
   originals_bucket_arn = module.mail_inbound.originals_bucket_arn
+}
+
+module "relay_smtp2go" {
+  source = "../modules/relay-smtp2go"
+
+  cnames = var.smtp2go_cnames
+}
+
+module "mail_outbound" {
+  source = "../modules/mail-outbound"
+
+  dispatcher_zip       = var.outbox_dispatcher_zip
+  worker_zip           = var.submission_worker_zip
+  recovery_zip         = var.submission_recovery_zip
+  domain               = var.domain
+  relay                = module.relay_smtp2go.relay
+  table_name           = module.mail_store.table_name
+  table_arn            = module.mail_store.table_arn
+  stream_arn           = module.mail_store.stream_arn
+  account_id           = module.mail_store.account_id
+  account_partition    = module.mail_store.account_partition
+  originals_bucket_arn = module.mail_inbound.originals_bucket_arn
+  index_queue_url      = module.search.index_queue_url
+  index_queue_arn      = module.search.index_queue_arn
 }

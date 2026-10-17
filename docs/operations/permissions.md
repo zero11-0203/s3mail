@@ -108,17 +108,6 @@
 
 A registration updates STATE and writes the SEARCH and one CHANGE record. `ListBucket` makes `HeadObject` on the not-yet-created index return 404 rather than 403; the bucket holds only index objects. The shared-table limitation applies.
 
-### `s3mail-search-dispatcher` (Lambda execution role)
-
-- **Module:** `infra/modules/search`
-- **Purpose:** on a one-minute schedule, wake the indexer when Emails were created or destroyed after the registered generation.
-
-| Statement | Actions | Resource | Condition |
-| --- | --- | --- | --- |
-| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-dispatcher` log group | — |
-| `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
-| `SendWakeUps` | `sqs:SendMessage` | `s3mail-index` queue | — |
-
 ### `s3mail-search-search` (Lambda execution role)
 
 - **Module:** `infra/modules/search`
@@ -132,8 +121,54 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 
 **Excluded for all search roles:**
 - No `dynamodb:DeleteItem`, no S3 delete of originals or index versions, no `dynamodb:Scan`.
-- Only the indexer writes (the table and the index bucket) and only it reads mail content; the dispatcher and search roles cannot read originals.
+- Only the indexer writes (the table and the index bucket) and only it reads mail content; the search role cannot read originals.
 - No SES, SNS, secrets, IAM or `sts:AssumeRole`.
+
+### `s3mail-outbound-dispatcher` (Lambda execution role)
+
+- **Module:** `infra/modules/mail-outbound`
+- **Purpose:** drain the transactional outbox: triggered by the table's KEYS_ONLY stream filtered to `OUTBOX#` inserts, plus a five-minute sweep that also checks the index against the change log ([storage](../specs/storage-sync.md#idempotency-and-durable-work)).
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-dispatcher` log group | — |
+| `DrainOwnAccountOutbox` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:DeleteItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ReadTableStream` | `dynamodb:DescribeStream`, `dynamodb:GetRecords`, `dynamodb:GetShardIterator`, `dynamodb:ListStreams` | the table's stream | — |
+| `SendWakeUps` | `sqs:SendMessage` | `s3mail-index` and `s3mail-submit` queues | — |
+
+`DeleteItem` acknowledges outbox entries after their destination accepted the work; the code deletes only `OUTBOX#` keys, but IAM cannot restrict sort-key prefixes, so the shared-table limitation applies. The stream carries keys only, never mail content.
+
+### `s3mail-outbound-worker` (Lambda execution role)
+
+- **Module:** `infra/modules/mail-outbound`
+- **Purpose:** claim, hand off and record submission attempts through the relay adapter ([outbound email](../specs/mail-flow.md#outbound-email)). The only role that reads the relay secret or talks to the relay.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-worker` log group | — |
+| `ReadAndCommitOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ReadRelayParameter` | `ssm:GetParameter` | `/s3mail/relay` parameter | — |
+| `ReadRelaySecret` | `secretsmanager:GetSecretValue` | `s3mail/relay/smtp2go` secret | — |
+| `ReadSendMaterial` | `s3:GetObjectVersion` | `<original bucket>/composed/*`, `<original bucket>/imported/*` | — |
+| `ConsumeAndRequeue` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes`, `sqs:SendMessage` | `s3mail-submit` queue | — |
+
+### `s3mail-outbound-recovery` (Lambda execution role)
+
+- **Module:** `infra/modules/mail-outbound`
+- **Purpose:** the one-minute work-recovery sweep: settle expired attempt leases and re-enqueue due submissions whose wake-up was lost.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-recovery` log group | — |
+| `ReadAndCommitOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ReadRelayParameter` | `ssm:GetParameter` | `/s3mail/relay` parameter | — |
+| `SendWakeUps` | `sqs:SendMessage` | `s3mail-submit` queue | — |
+
+**Excluded for all outbound roles:**
+- No S3 write or delete; only the worker reads originals, by exact version and only under `composed/` and `imported/`.
+- Only the worker reads the relay secret; no role can write the secret or the relay parameter (both are set out of band).
+- Only the dispatcher deletes table items. Worker and recovery commits write STATE, CHANGE, SUBMISSION, ATTEMPT, QUOTA and OUTBOX records and never delete; attempt records are append-only.
+- No `dynamodb:Scan`, SES, SNS, IAM or `sts:AssumeRole`.
 
 ## Resource policies
 
@@ -150,8 +185,10 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `s3mail-jmap-api` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/.well-known/jmap`, `<api>/*/POST/jmap` and `<api>/*/POST/upload/*` |
 | `s3mail-jmap-download` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/download/*` |
 | `s3mail-jmap-push` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/GET/eventsource` |
-| `s3mail-search-dispatcher` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-search-dispatch` schedule rule |
 | Index DLQ | — | Redrive allowed only from the index queue | — |
+| `s3mail-outbound-dispatcher` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-dispatcher` schedule rule |
+| `s3mail-outbound-recovery` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-recovery` schedule rule |
+| Submission DLQ | — | Redrive allowed only from the submission queue | — |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
 
 Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues; see [the evidence finding](../evidence/phase0-ses-receiving.md#findings).
@@ -159,5 +196,5 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The outbox dispatcher, submission, webhook, GC and recovery roles. Uploads run in the API role.
+- The relay webhook (bounce ingestion), GC and owner-recovery roles. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.

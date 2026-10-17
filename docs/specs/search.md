@@ -84,7 +84,7 @@ Mail arrives in many languages and character sets.
 
 What is deployed (`go/internal/search`, `infra/modules/search`) and where it is narrower than the design above:
 
-- **Dispatch:** a scheduled dispatcher (one minute) reads the registration, STATE and the change ledger and sends one SQS wake-up while Emails were created or destroyed after the registered sequence. It does not yet drain the `OUTBOX#…#index` entries; they remain for the outbox dispatcher and history GC. The indexer coalesces wake-ups for a 60-second batching window.
+- **Dispatch:** the outbox dispatcher (`go/internal/dispatch`, `infra/modules/mail-outbound`) drains `OUTBOX#…#index` entries within seconds of a commit, through the table stream, and coalesces them into one SQS wake-up; its five-minute sweep also wakes the indexer while the change ledger shows Emails created or destroyed after the registered sequence. The indexer coalesces wake-ups for a 60-second batching window.
 - **Search-dirty set:** the index holds only immutable per-Email content (headers, visible body text, attachment names, has-attachment), so only created and destroyed Emails are re-indexed. Mailbox, keyword and thread filters always use the live metadata read, never the index.
 - **Field matching:** `text`, `body`, `bcc` and `hasAttachment` use the index. `from`, `to`, `cc` and `subject` use case-insensitive substring matching on the live header projection.
 - **CJK segmentation:** NFKC, case folding and overlapping CJK character bigrams only. Dictionary segmentation (`gse`, `kagome`) and language detection are deferred to keep the Lambda package small; bigram phrase queries already match any CJK word of two or more characters, at some precision cost.

@@ -22,7 +22,7 @@ const (
 	streamTime = 14*time.Minute + 30*time.Second
 )
 
-var pushTypes = []string{"Email", "Mailbox", "Thread"}
+var pushTypes = []string{"Email", "Mailbox", "Thread", "Identity", "EmailSubmission"}
 
 // HandleEventSource serves GET /eventsource (RFC 8620 §7.3) by polling the
 // strongly consistent account state. The stream ends at token expiry, on

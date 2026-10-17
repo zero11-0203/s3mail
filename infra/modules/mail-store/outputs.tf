@@ -15,3 +15,8 @@ output "account_partition" {
   description = "Partition key value, for dynamodb:LeadingKeys conditions."
   value       = "ACCOUNT#${var.account_id}"
 }
+
+output "stream_arn" {
+  description = "The KEYS_ONLY stream the outbox dispatcher consumes."
+  value       = aws_dynamodb_table.mail.stream_arn
+}

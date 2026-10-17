@@ -38,3 +38,13 @@ output "jmap" {
     function_names        = module.jmap_api.function_names
   }
 }
+
+output "mail_outbound" {
+  description = "Sending configuration set out of band and the submission queues."
+  value = {
+    relay_secret_arn = module.mail_outbound.relay_secret_arn
+    relay_parameter  = module.mail_outbound.relay_parameter
+    submit_dlq_arn   = module.mail_outbound.submit_dlq_arn
+    function_names   = module.mail_outbound.function_names
+  }
+}

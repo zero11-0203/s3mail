@@ -609,6 +609,9 @@ func (s *Server) commitLoop(ctx context.Context, attempt func(st State) (*model.
 		if errors.Is(err, ErrStateChanged) {
 			continue
 		}
+		if errors.Is(err, model.ErrOverQuota) {
+			return State{}, &SetError{Type: "overQuota", Description: "the relay's sending quota for this period is used up"}
+		}
 		if errors.Is(err, model.ErrTooLarge) {
 			return State{}, &SetError{Type: "tooLarge", Description: "the change exceeds the transaction limits"}
 		}

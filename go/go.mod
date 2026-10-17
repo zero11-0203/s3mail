@@ -14,7 +14,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.70.3
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.113.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.4
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.4
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.79.3
 	github.com/aws/smithy-go v1.28.5
 	github.com/ncruces/go-sqlite3 v0.35.6
 	golang.org/x/text v0.43.0

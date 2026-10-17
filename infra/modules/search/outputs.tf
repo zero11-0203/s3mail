@@ -14,3 +14,7 @@ output "index_queue_arn" {
 output "index_dlq_arn" {
   value = aws_sqs_queue.index_dlq.arn
 }
+
+output "index_queue_url" {
+  value = aws_sqs_queue.index.url
+}

@@ -13,6 +13,8 @@ import (
 const (
 	CapCore = "urn:ietf:params:jmap:core"
 	CapMail = "urn:ietf:params:jmap:mail"
+	// CapSubmission is advertised only when sending is configured.
+	CapSubmission = "urn:ietf:params:jmap:submission"
 )
 
 // Advertised limits (docs/specs/jmap.md#limits-and-blobs).
@@ -100,6 +102,10 @@ type SetError struct {
 	Properties  []string `json:"properties,omitempty"`
 	// NotFound lists missing blob ids for blobNotFound (RFC 8621 §4.6).
 	NotFound []string `json:"notFound,omitempty"`
+	// EmailSubmission/set details (RFC 8621 §7.5).
+	MaxSize           int64    `json:"maxSize,omitempty"`
+	MaxRecipients     int      `json:"maxRecipients,omitempty"`
+	InvalidRecipients []string `json:"invalidRecipients,omitempty"`
 }
 
 type handlerFunc func(ctx context.Context, c *call) (any, *MethodError)
@@ -117,6 +123,14 @@ type call struct {
 	// created maps creation ids to the ids they produced in this request
 	// (RFC 8620 §5.3); it also receives the request's createdIds.
 	created map[string]string
+	// followUps are implicit responses that follow the method's own, with
+	// the same call id (RFC 8621 §7.5 success hooks).
+	followUps []followUp
+}
+
+type followUp struct {
+	name   string
+	result any
 }
 
 // resolveID maps "#creationId" to the created object id.
@@ -143,7 +157,7 @@ func (c *call) decode(v any, accountID *string) *MethodError {
 
 // Validate checks the request envelope before any method runs.
 func (s *Server) validate(req *Request) *Problem {
-	known := map[string]bool{CapCore: true, CapMail: true}
+	known := map[string]bool{CapCore: true, CapMail: true, CapSubmission: s.Sending != nil}
 	for _, u := range req.Using {
 		if !known[u] {
 			return problem("unknownCapability", 400, "unsupported capability "+strconv.Quote(u))
@@ -173,11 +187,12 @@ func (s *Server) Execute(ctx context.Context, acct Account, req *Request) *Respo
 	}
 	var done []resolved
 	for _, inv := range req.MethodCalls {
-		out := s.invoke(ctx, acct, using, inv, done, created)
-		resp.MethodResponses = append(resp.MethodResponses, out)
-		var v any
-		_ = json.Unmarshal(out.Args, &v)
-		done = append(done, resolved{name: out.Name, callID: out.CallID, value: v})
+		for _, out := range s.invoke(ctx, acct, using, inv, done, created) {
+			resp.MethodResponses = append(resp.MethodResponses, out)
+			var v any
+			_ = json.Unmarshal(out.Args, &v)
+			done = append(done, resolved{name: out.Name, callID: out.CallID, value: v})
+		}
 	}
 	if req.CreatedIDs != nil {
 		resp.CreatedIDs = created
@@ -193,13 +208,13 @@ type resolved struct {
 	value        any
 }
 
-func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool, inv Invocation, done []resolved, created map[string]string) Invocation {
-	fail := func(e *MethodError) Invocation {
+func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool, inv Invocation, done []resolved, created map[string]string) []Invocation {
+	fail := func(e *MethodError) []Invocation {
 		b, _ := json.Marshal(e)
-		return Invocation{Name: "error", Args: b, CallID: inv.CallID}
+		return []Invocation{{Name: "error", Args: b, CallID: inv.CallID}}
 	}
 	m, ok := s.methods[inv.Name]
-	if !ok || !using[m.capability] {
+	if !ok || !using[m.capability] || (m.capability == CapSubmission && s.Sending == nil) {
 		return fail(methodErr("unknownMethod", inv.Name))
 	}
 	if !acct.has(m.scope) {
@@ -209,15 +224,20 @@ func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool
 	if merr != nil {
 		return fail(merr)
 	}
-	result, merr := m.fn(ctx, &call{s: s, acct: acct, args: args, created: created})
+	c := &call{s: s, acct: acct, args: args, created: created}
+	result, merr := m.fn(ctx, c)
 	if merr != nil {
 		return fail(merr)
 	}
-	b, err := json.Marshal(result)
-	if err != nil {
-		return fail(methodErr("serverFail", "encode response"))
+	out := []Invocation{}
+	for _, r := range append([]followUp{{inv.Name, result}}, c.followUps...) {
+		b, err := json.Marshal(r.result)
+		if err != nil {
+			return fail(methodErr("serverFail", "encode response"))
+		}
+		out = append(out, Invocation{Name: r.name, Args: b, CallID: inv.CallID})
 	}
-	return Invocation{Name: inv.Name, Args: b, CallID: inv.CallID}
+	return out
 }
 
 // resolveReferences replaces "#name" arguments with the referenced values

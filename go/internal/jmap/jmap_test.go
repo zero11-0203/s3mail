@@ -29,6 +29,33 @@ type memStore struct {
 	uploads   map[string]model.Upload
 	changes   []Change
 	raw       map[string][]byte
+	idents    map[string]model.Identity
+	subs      map[string]model.Submission
+	quota     map[string]int64
+	sends     []string
+}
+
+func (m *memStore) ListIdentities(context.Context) ([]model.Identity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Collect(maps.Values(m.idents)), nil
+}
+
+func (m *memStore) ListSubmissions(context.Context) ([]model.Submission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []model.Submission
+	for _, x := range m.subs {
+		out = append(out, x.Clone())
+	}
+	return out, nil
+}
+
+func (m *memStore) GetSubmission(_ context.Context, id string) (model.Submission, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x, ok := m.subs[id]
+	return x.Clone(), ok, nil
 }
 
 func (m *memStore) State(context.Context) (State, error) {
@@ -194,7 +221,26 @@ func (m *memStore) Commit(_ context.Context, prev State, mu model.Mutation) (Sta
 	if prev != m.st {
 		return State{}, ErrStateChanged
 	}
+	for _, q := range mu.Quota {
+		if q.Units > 0 && m.quota[q.Key]+q.Units > q.Limit {
+			return State{}, model.ErrOverQuota
+		}
+	}
 	ef := model.Plan(mu, memDerived{m.emails})
+	for _, q := range mu.Quota {
+		m.quota[q.Key] += q.Units
+	}
+	for _, c := range mu.Identities {
+		if c.After != nil {
+			m.idents[c.After.ID] = *c.After
+		} else {
+			delete(m.idents, c.Before.ID)
+		}
+	}
+	for _, c := range mu.Submissions {
+		m.subs[c.After.ID] = c.After.Clone()
+	}
+	m.sends = append(m.sends, mu.Send...)
 	for _, c := range mu.Emails {
 		if c.After != nil {
 			m.emails[c.After.ID] = c.After.Clone()
@@ -296,7 +342,8 @@ const rawA = "From: =?utf-8?q?J=C3=B6rg?= <j@example.net>\r\nTo: alice@example.c
 	"--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=a.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0x\r\n--b--\r\n"
 
 func fixture() (*Server, *memStore) {
-	m := &memStore{st: State{Epoch: 1}, emails: map[string]EmailMeta{}, mailboxes: map[string]Mailbox{}, uploads: map[string]model.Upload{}, raw: map[string][]byte{}}
+	m := &memStore{st: State{Epoch: 1}, emails: map[string]EmailMeta{}, mailboxes: map[string]Mailbox{}, uploads: map[string]model.Upload{}, raw: map[string][]byte{},
+		idents: map[string]model.Identity{}, subs: map[string]model.Submission{}, quota: map[string]int64{}}
 	m.add(EmailMeta{ID: idA, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0, Subject: "日本", From: []string{"j@example.net"}, MessageID: "<a@example.net>"}, rawA)
 	m.add(EmailMeta{ID: idB, MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0.Add(time.Hour), Subject: "second", From: []string{"bob@example.net"},
 		Keywords: map[string]bool{"$seen": true}}, "Subject: second\r\n\r\nB body\r\n")

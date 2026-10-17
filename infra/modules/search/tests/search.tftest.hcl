@@ -18,10 +18,6 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:s3:::s3mail-index-x", id = "s3mail-index-x" }
   }
 
-  mock_resource "aws_cloudwatch_event_rule" {
-    defaults = { arn = "arn:aws:events:us-east-1:111111111111:rule/s3mail-search-dispatch" }
-  }
-
   mock_resource "aws_sqs_queue" {
     defaults = { arn = "arn:aws:sqs:us-east-1:111111111111:s3mail-index", url = "https://sqs.us-east-1.amazonaws.com/111111111111/s3mail-index" }
   }
@@ -29,7 +25,6 @@ mock_provider "aws" {
 
 variables {
   indexer_zip          = "tests/fake-lambda.txt"
-  dispatcher_zip       = "tests/fake-lambda.txt"
   search_zip           = "tests/fake-lambda.txt"
   table_name           = "s3mail-mail"
   table_arn            = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-mail"
@@ -56,7 +51,7 @@ run "least_privilege" {
   }
 
   assert {
-    condition = alltrue([for k in ["dispatcher", "search"] : alltrue([
+    condition = alltrue([for k in ["search"] : alltrue([
       for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement : !anytrue([
         for a in flatten([st.Action]) : contains(["dynamodb:PutItem", "dynamodb:UpdateItem", "s3:PutObject"], a)
       ])
@@ -65,7 +60,7 @@ run "least_privilege" {
   }
 
   assert {
-    condition = alltrue([for k in ["dispatcher", "search"] : alltrue([
+    condition = alltrue([for k in ["search"] : alltrue([
       for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement :
       !anytrue([for r in flatten([st.Resource]) : startswith(r, var.originals_bucket_arn)])
     ])])

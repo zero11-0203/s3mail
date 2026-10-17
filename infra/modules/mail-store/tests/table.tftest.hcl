@@ -24,4 +24,9 @@ run "table_has_no_backups_and_is_protected" {
     condition     = output.account_partition == "ACCOUNT#primary"
     error_message = "the partition key names the account"
   }
+
+  assert {
+    condition     = aws_dynamodb_table.mail.stream_enabled && aws_dynamodb_table.mail.stream_view_type == "KEYS_ONLY"
+    error_message = "the dispatcher stream carries keys only, never mail content"
+  }
 }

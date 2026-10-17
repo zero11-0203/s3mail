@@ -41,6 +41,10 @@ type Store interface {
 	// Commit applies one mutation guarded by prev and returns the new state.
 	Commit(ctx context.Context, prev State, m model.Mutation) (State, error)
 	GetUpload(ctx context.Context, id string) (model.Upload, bool, error)
+	ListIdentities(ctx context.Context) ([]model.Identity, error)
+	// ListSubmissions includes destroyed (hidden) submissions.
+	ListSubmissions(ctx context.Context) ([]model.Submission, error)
+	GetSubmission(ctx context.Context, id string) (model.Submission, bool, error)
 	model.ThreadLookup
 }
 

@@ -20,7 +20,9 @@ type Server struct {
 	Uploads Uploads
 	// Searcher answers text conditions and snippets; nil disables them.
 	Searcher Searcher
-	Log      *slog.Logger
+	// Sending enables Identity and EmailSubmission; nil disables them.
+	Sending *Sending
+	Log     *slog.Logger
 	// Now overrides the clock (tests).
 	Now func() time.Time
 	// PushPoll overrides PollInterval (tests).
@@ -34,24 +36,32 @@ type Server struct {
 func NewServer(baseURL string, store Store, originals Originals, log *slog.Logger) *Server {
 	s := &Server{BaseURL: baseURL, Store: store, Originals: originals, Log: log, epoch: 1}
 	s.methods = map[string]method{
-		"Core/echo":            {CapCore, ScopeRead, echo},
-		"Mailbox/get":          {CapMail, ScopeRead, mailboxGet},
-		"Mailbox/changes":      {CapMail, ScopeRead, mailboxChanges},
-		"Mailbox/query":        {CapMail, ScopeRead, mailboxQuery},
-		"Mailbox/queryChanges": {CapMail, ScopeRead, mailboxQueryChanges},
-		"Mailbox/set":          {CapMail, ScopeWrite, mailboxSet},
-		"Thread/get":           {CapMail, ScopeRead, threadGet},
-		"Thread/changes":       {CapMail, ScopeRead, threadChanges},
-		"Email/get":            {CapMail, ScopeRead, emailGet},
-		"Email/query":          {CapMail, ScopeRead, emailQuery},
-		"Email/changes":        {CapMail, ScopeRead, emailChanges},
-		"Email/queryChanges":   {CapMail, ScopeRead, emailQueryChanges},
-		"SearchSnippet/get":    {CapMail, ScopeRead, searchSnippetGet},
-		"Email/set":            {CapMail, ScopeWrite, emailSet},
-		"Email/import":         {CapMail, ScopeWrite, emailImport},
-		"Email/parse":          {CapMail, ScopeRead, emailParse},
-		"Email/copy":           {CapMail, ScopeWrite, copyBetweenAccounts},
-		"Blob/copy":            {CapCore, ScopeWrite, copyBetweenAccounts},
+		"Core/echo":                    {CapCore, ScopeRead, echo},
+		"Mailbox/get":                  {CapMail, ScopeRead, mailboxGet},
+		"Mailbox/changes":              {CapMail, ScopeRead, mailboxChanges},
+		"Mailbox/query":                {CapMail, ScopeRead, mailboxQuery},
+		"Mailbox/queryChanges":         {CapMail, ScopeRead, mailboxQueryChanges},
+		"Mailbox/set":                  {CapMail, ScopeWrite, mailboxSet},
+		"Thread/get":                   {CapMail, ScopeRead, threadGet},
+		"Thread/changes":               {CapMail, ScopeRead, threadChanges},
+		"Email/get":                    {CapMail, ScopeRead, emailGet},
+		"Email/query":                  {CapMail, ScopeRead, emailQuery},
+		"Email/changes":                {CapMail, ScopeRead, emailChanges},
+		"Email/queryChanges":           {CapMail, ScopeRead, emailQueryChanges},
+		"SearchSnippet/get":            {CapMail, ScopeRead, searchSnippetGet},
+		"Email/set":                    {CapMail, ScopeWrite, emailSet},
+		"Email/import":                 {CapMail, ScopeWrite, emailImport},
+		"Email/parse":                  {CapMail, ScopeRead, emailParse},
+		"Email/copy":                   {CapMail, ScopeWrite, copyBetweenAccounts},
+		"Blob/copy":                    {CapCore, ScopeWrite, copyBetweenAccounts},
+		"Identity/get":                 {CapSubmission, ScopeRead, identityGet},
+		"Identity/changes":             {CapSubmission, ScopeRead, identityChanges},
+		"Identity/set":                 {CapSubmission, ScopeWrite, identitySet},
+		"EmailSubmission/get":          {CapSubmission, ScopeRead, submissionGet},
+		"EmailSubmission/changes":      {CapSubmission, ScopeRead, submissionChanges},
+		"EmailSubmission/query":        {CapSubmission, ScopeRead, submissionQuery},
+		"EmailSubmission/queryChanges": {CapSubmission, ScopeRead, submissionQueryChanges},
+		"EmailSubmission/set":          {CapSubmission, ScopeSubmit, submissionSet},
 	}
 	return s
 }
@@ -135,22 +145,31 @@ func (s *Server) Session(ctx context.Context, acct Account) (*Session, error) {
 	}
 	s.epoch = st.Epoch
 	id := s.publicID(acct)
+	caps := map[string]any{CapCore: coreCapability(), CapMail: map[string]any{}}
+	acctCaps := map[string]any{CapMail: map[string]any{
+		"maxMailboxesPerEmail":       MaxMailboxesPerEmail,
+		"maxMailboxDepth":            maxMailboxDepth,
+		"maxSizeMailboxName":         maxMailboxNameSize,
+		"maxSizeAttachmentsPerEmail": 20 << 20,
+		"emailQuerySortOptions":      emailSortOptions,
+		"mayCreateTopLevelMailbox":   true,
+	}}
+	primary := map[string]string{CapMail: id}
+	if s.Sending != nil {
+		caps[CapSubmission] = map[string]any{}
+		// No delayed send and no SMTP extensions.
+		acctCaps[CapSubmission] = map[string]any{"maxDelayedSend": 0, "submissionExtensions": map[string]any{}}
+		primary[CapSubmission] = id
+	}
 	return &Session{
-		Capabilities: map[string]any{CapCore: coreCapability(), CapMail: map[string]any{}},
+		Capabilities: caps,
 		Accounts: map[string]SessionAccount{id: {
-			Name:       acct.Username,
-			IsPersonal: true,
-			IsReadOnly: false,
-			AccountCapabilities: map[string]any{CapMail: map[string]any{
-				"maxMailboxesPerEmail":       MaxMailboxesPerEmail,
-				"maxMailboxDepth":            maxMailboxDepth,
-				"maxSizeMailboxName":         maxMailboxNameSize,
-				"maxSizeAttachmentsPerEmail": 20 << 20,
-				"emailQuerySortOptions":      emailSortOptions,
-				"mayCreateTopLevelMailbox":   true,
-			}},
+			Name:                acct.Username,
+			IsPersonal:          true,
+			IsReadOnly:          false,
+			AccountCapabilities: acctCaps,
 		}},
-		PrimaryAccounts: map[string]string{CapMail: id},
+		PrimaryAccounts: primary,
 		Username:        acct.Username,
 		APIURL:          s.BaseURL + "/jmap",
 		DownloadURL:     s.BaseURL + "/download/{accountId}/{blobId}/{name}?type={type}",
@@ -162,7 +181,7 @@ func (s *Server) Session(ctx context.Context, acct Account) (*Session, error) {
 
 // sessionState changes when anything in the session object would.
 func (s *Server) sessionState(acct Account, st State) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%s\x00%d\x00%s\x00%s", acct.InternalID, st.Epoch, acct.Username, s.BaseURL)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%s\x00%d\x00%s\x00%s\x00%t", acct.InternalID, st.Epoch, acct.Username, s.BaseURL, s.Sending != nil)))
 	return hex.EncodeToString(sum[:8])
 }
 

@@ -93,6 +93,20 @@ variable "search_function_arn" {
   default     = null
 }
 
+variable "sending" {
+  description = "Enables Identity and EmailSubmission on the API function. Null disables submission."
+  type = object({
+    domain        = string
+    aliases       = list(string)
+    relay         = string
+    daily         = number
+    monthly       = number
+    per_recipient = bool
+    timezone      = string
+  })
+  default = null
+}
+
 variable "push_concurrency" {
   description = "Reserved concurrency of the push function: the cap on open EventSource streams."
   type        = number

@@ -192,7 +192,17 @@ resource "aws_lambda_function" "fn" {
       PUBLIC_URL       = local.base_url
       ORIGINALS_BUCKET = var.originals_bucket_name
       BLOBS_BUCKET     = aws_s3_bucket.blobs.id
-    }, each.key == "api" && var.search_function_arn != null ? { SEARCH_FUNCTION = var.search_function_arn } : {})
+      },
+      each.key == "api" && var.search_function_arn != null ? { SEARCH_FUNCTION = var.search_function_arn } : {},
+      each.key == "api" && var.sending != null ? {
+        DOMAIN              = var.sending.domain
+        SEND_ALIASES        = join(",", var.sending.aliases)
+        RELAY               = var.sending.relay
+        QUOTA_DAILY         = tostring(var.sending.daily)
+        QUOTA_MONTHLY       = tostring(var.sending.monthly)
+        QUOTA_PER_RECIPIENT = tostring(var.sending.per_recipient)
+        QUOTA_TIMEZONE      = var.sending.timezone
+    } : {})
   }
 
   logging_config {

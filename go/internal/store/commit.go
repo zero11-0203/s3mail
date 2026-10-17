@@ -47,6 +47,8 @@ func (a *Account) Commit(ctx context.Context, prev model.State, m model.Mutation
 			return model.State{}, model.ErrDuplicateReceipt
 		case m.Search != nil && reason(tce, 1) == "ConditionalCheckFailed":
 			return model.State{}, model.ErrSearchConflict
+		case quotaFailed(tce, m):
+			return model.State{}, model.ErrOverQuota
 		}
 		return model.State{}, fmt.Errorf("commit canceled: %w", err)
 	}
@@ -94,9 +96,10 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 	state := &types.Update{
 		TableName:        &a.Table,
 		Key:              a.key("STATE"),
-		UpdateExpression: aws.String("SET seq = :next, emailState = :e, mailboxState = :m, threadState = :t, epoch = if_not_exists(epoch, :one)"),
+		UpdateExpression: aws.String("SET seq = :next, emailState = :e, mailboxState = :m, threadState = :t, identityState = :i, submissionState = :s, epoch = if_not_exists(epoch, :one)"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":next": n(next.Seq), ":e": n(next.Email), ":m": n(next.Mailbox), ":t": n(next.Thread), ":one": n(1),
+			":next": n(next.Seq), ":e": n(next.Email), ":m": n(next.Mailbox), ":t": n(next.Thread),
+			":i": n(next.Identity), ":s": n(next.Submission), ":one": n(1),
 		},
 	}
 	if prev.Seq == 0 {
@@ -134,9 +137,16 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 		}})
 	}
 
+	// Quota reservations follow STATE and any receipt/registration item,
+	// so their cancellation reasons can be classified.
+	for _, q := range m.Quota {
+		items = append(items, a.quotaItem(q))
+	}
+
 	for _, c := range m.Emails {
 		items = append(items, a.emailItems(c, next.Seq)...)
 	}
+	items = append(items, a.sendItems(m, next.Seq)...)
 
 	destroyedMailboxes := map[string]bool{}
 	for _, c := range m.Mailboxes {
@@ -200,6 +210,9 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 		change["searchDirty"] = l(ef.SearchDirty...)
 	}
 	items = append(items, a.put("CHANGE#"+padded(next.Seq), change, absent))
+	if len(m.Send) > 0 {
+		items = append(items, a.put("OUTBOX#"+padded(next.Seq)+"#submit", map[string]types.AttributeValue{"submissionIds": l(m.Send...)}, absent))
+	}
 	if len(ef.SearchDirty) > 0 {
 		items = append(items, a.put("OUTBOX#"+padded(next.Seq)+"#index", map[string]types.AttributeValue{"emailIds": l(ef.SearchDirty...)}, absent))
 	}

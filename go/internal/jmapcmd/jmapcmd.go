@@ -8,6 +8,9 @@
 // Emails) and BLOBS_BUCKET (uploads). Each role's policy decides which of
 // the buckets the function can actually use. SEARCH_FUNCTION, when set,
 // enables text conditions and SearchSnippet/get through the search function.
+// SEND_ALIASES (comma-separated local parts, never the canary), with
+// DOMAIN and the sendcmd policy variables, enables Identity and
+// EmailSubmission.
 package jmapcmd
 
 import (
@@ -28,6 +31,7 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/buildinfo"
 	"github.com/zero11-0203/s3mail/go/internal/jmap"
 	"github.com/zero11-0203/s3mail/go/internal/searchcmd"
+	"github.com/zero11-0203/s3mail/go/internal/sendcmd"
 	"github.com/zero11-0203/s3mail/go/internal/store"
 )
 
@@ -64,6 +68,22 @@ func Start(component string, h Handler) {
 	srv.Uploads = &store.Uploads{S3: s3c, Bucket: env["BLOBS_BUCKET"]}
 	if fn := os.Getenv("SEARCH_FUNCTION"); fn != "" {
 		srv.Searcher = &searchcmd.LambdaSearcher{Lambda: awslambda.NewFromConfig(cfg), Function: fn}
+	}
+	if aliases := os.Getenv("SEND_ALIASES"); aliases != "" {
+		policy, err := sendcmd.PolicyFromEnv()
+		if err != nil {
+			log.Fatal(err)
+		}
+		sd := &jmap.Sending{Domain: strings.ToLower(os.Getenv("DOMAIN")), Policy: policy}
+		for _, a := range strings.Split(aliases, ",") {
+			if a = strings.ToLower(strings.TrimSpace(a)); a != "" {
+				sd.Aliases = append(sd.Aliases, a)
+			}
+		}
+		if sd.Domain == "" {
+			log.Fatal("DOMAIN is required with SEND_ALIASES")
+		}
+		srv.Sending = sd
 	}
 
 	lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (*events.APIGatewayProxyStreamingResponse, error) {
