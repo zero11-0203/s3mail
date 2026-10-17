@@ -67,6 +67,11 @@ run "every_jmap_route_requires_the_bearer_authorizer" {
   }
 
   assert {
+    condition     = aws_api_gateway_integration.metadata.content_handling == "CONVERT_TO_TEXT"
+    error_message = "the MOCK template must still apply with binary_media_types = */*"
+  }
+
+  assert {
     condition     = alltrue([for i in aws_api_gateway_integration.route : i.response_transfer_mode == "STREAM" && i.timeout_milliseconds == 900000])
     error_message = "integrations stream with the 15-minute timeout"
   }

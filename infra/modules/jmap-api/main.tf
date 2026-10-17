@@ -536,6 +536,9 @@ resource "aws_api_gateway_integration" "metadata" {
   http_method       = aws_api_gateway_method.metadata.http_method
   type              = "MOCK"
   request_templates = { "application/json" = "{\"statusCode\": 200}" }
+  # With binary_media_types = */* every request counts as binary, which
+  # would skip the template; converting to text applies it again.
+  content_handling = "CONVERT_TO_TEXT"
 }
 
 resource "aws_api_gateway_method_response" "metadata" {
@@ -554,6 +557,8 @@ resource "aws_api_gateway_integration_response" "metadata" {
   resource_id = aws_api_gateway_resource.metadata.id
   http_method = aws_api_gateway_method.metadata.http_method
   status_code = aws_api_gateway_method_response.metadata.status_code
+  # See the integration: keep the templated body text under */*.
+  content_handling = "CONVERT_TO_TEXT"
 
   response_parameters = {
     "method.response.header.Cache-Control" = "'max-age=300'"
