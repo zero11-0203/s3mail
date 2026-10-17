@@ -25,6 +25,9 @@ type State struct {
 	Thread     int64
 	Identity   int64
 	Submission int64
+	// Delivery is the last commit that added an Email: the push-only
+	// EmailDelivery type (RFC 8621 §1.5).
+	Delivery int64
 	// Floor is the history floor: change records at or below it may have
 	// been pruned (docs/operations/recovery.md#retention-deletion-and-garbage-collection).
 	Floor int64
@@ -43,6 +46,8 @@ func (s State) Of(typ string) int64 {
 		return s.Identity
 	case "EmailSubmission":
 		return s.Submission
+	case "EmailDelivery":
+		return s.Delivery
 	}
 	return s.Seq
 }

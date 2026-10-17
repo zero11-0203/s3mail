@@ -112,6 +112,22 @@ func TestHTMLOnlyAlternativeFillsTextBody(t *testing.T) {
 	}
 }
 
+// The RFC 8621 §4.1.4 pseudo-code stops filling a list inside an
+// alternative and then hands the null list to a nested alternative.
+const nestedAlternative = "Content-Type: multipart/alternative; boundary=a\n\n" +
+	"--a\nContent-Type: multipart/mixed; boundary=m\n\n" +
+	"--m\nContent-Type: text/plain\n\nhi\n" +
+	"--m\nContent-Type: multipart/alternative; boundary=n\n\n" +
+	"--n\nContent-Type: text/plain\n\nx\n--n\nContent-Type: text/html\n\n<b>x</b>\n--n--\n" +
+	"--m--\n--a--\n"
+
+func TestNestedAlternativeAfterInlineText(t *testing.T) {
+	b := Parse(crlf(nestedAlternative)).BodyLists()
+	if types(b.Text) != "1:text/plain 2:text/plain" || types(b.HTML) != "1:text/plain 2:text/plain" || len(b.Attachments) != 0 {
+		t.Errorf("text %q html %q att %q", types(b.Text), types(b.HTML), types(b.Attachments))
+	}
+}
+
 func TestNamedTextAfterFirstIsAttachment(t *testing.T) {
 	msg := "Content-Type: multipart/mixed; boundary=b\n\n--b\n\nbody\n--b\nContent-Type: text/plain; name=notes.txt\n\nnotes\n--b--\n"
 	b := Parse(crlf(msg)).BodyLists()
@@ -133,6 +149,29 @@ func TestLegacyCharsets(t *testing.T) {
 	}
 	if v := (&Part{Charset: "x-unknown", content: []byte("abc")}).Value(0); !v.IsEncodingProblem || v.Value != "abc" {
 		t.Errorf("unknown charset %+v", v)
+	}
+}
+
+func TestTextFormNormalizesAndDropsControls(t *testing.T) {
+	if got := AsText("café"); got != "café" {
+		t.Errorf("not NFC: %q", got)
+	}
+	if got := AsText("=?utf-8?Q?hi=00=01?= there\tnow"); got != "hi there\tnow" {
+		t.Errorf("controls kept: %q", got)
+	}
+	if a := AsAddresses("=?utf-8?Q?J=C3=B6rg=07?= <j@example.com>"); len(a) != 1 || *a[0].Name != "Jörg" {
+		t.Errorf("address name %+v", a)
+	}
+}
+
+func TestUnknownTransferEncodingIsAnEncodingProblem(t *testing.T) {
+	m := Parse(crlf("Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: x-unknown\n\nabc\n"))
+	if v := m.Body.Value(0); !v.IsEncodingProblem || v.Value != "abc\n" {
+		t.Errorf("unknown transfer encoding %+v", v)
+	}
+	m = Parse(crlf("Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\nabc\n"))
+	if v := m.Body.Value(0); v.IsEncodingProblem {
+		t.Errorf("8bit flagged %+v", v)
 	}
 }
 
@@ -214,6 +253,7 @@ func TestMissingClosingBoundaryKeepsLastPart(t *testing.T) {
 func FuzzParse(f *testing.F) {
 	f.Add(crlf(mixed))
 	f.Add([]byte("Content-Type: multipart/mixed; boundary=b\n\n--b\n--b--"))
+	f.Add(crlf(nestedAlternative))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		m := Parse(raw)
 		for _, p := range m.Leaves() {

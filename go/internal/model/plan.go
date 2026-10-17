@@ -29,8 +29,9 @@ type Effects struct {
 	// Counts holds counter deltas per mailbox.
 	Counts map[string]Counts
 	Change Change
-	// The data types whose state advances.
-	Email, Mailbox, Thread, Identity, Submission bool
+	// The data types whose state advances; Delivery when an Email is
+	// added by any path (delivery, import or creation).
+	Email, Mailbox, Thread, Identity, Submission, Delivery bool
 	// SearchDirty lists Emails the index must re-read.
 	SearchDirty []string
 }
@@ -114,6 +115,7 @@ func Plan(m Mutation, d Derived) Effects {
 		switch {
 		case c.Before == nil && c.After != nil:
 			note(ef.Change.Created, "Email", c.After.ID)
+			ef.Delivery = true
 			threadDelta[c.After.ThreadID]++
 			if !slices.Contains(threadOrder, c.After.ThreadID) {
 				threadOrder = append(threadOrder, c.After.ThreadID)
@@ -261,6 +263,9 @@ func (ef Effects) Next(prev State) State {
 	}
 	if ef.Submission {
 		next.Submission = next.Seq
+	}
+	if ef.Delivery {
+		next.Delivery = next.Seq
 	}
 	return next
 }

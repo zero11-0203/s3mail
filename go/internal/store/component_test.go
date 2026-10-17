@@ -101,7 +101,7 @@ func TestComponentReceiptsThreadsAndCounters(t *testing.T) {
 	}
 
 	st, _ := a.State(ctx)
-	if st != (model.State{Seq: 3, Epoch: 1, Email: 3, Mailbox: 3, Thread: 3}) {
+	if st != (model.State{Seq: 3, Epoch: 1, Email: 3, Mailbox: 3, Thread: 3, Delivery: 3}) {
 		t.Errorf("state %+v", st)
 	}
 	emails, err := a.ListEmails(ctx)

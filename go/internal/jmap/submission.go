@@ -430,7 +430,7 @@ func (c *call) successHooks(ctx context.Context, a submissionSetArgs, succeeded 
 func (s *Server) createSubmission(ctx context.Context, c *call, identities map[string]model.Identity, raw json.RawMessage) (model.Submission, State, *SetError) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return model.Submission{}, State{}, &SetError{Type: "invalidArguments", Description: "creation is not an object"}
+		return model.Submission{}, State{}, invalidProps("creation is not an object")
 	}
 	var identityID, emailRef string
 	var env *envelope

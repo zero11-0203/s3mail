@@ -38,6 +38,9 @@ type Part struct {
 	SubParts    []*Part
 
 	content []byte // decoded content of leaf parts
+	// unknownTransfer marks a Content-Transfer-Encoding that could not be
+	// removed; content is then the encoded bytes.
+	unknownTransfer bool
 }
 
 // Content returns the decoded (transfer-encoding removed) bytes of a leaf.
@@ -133,7 +136,8 @@ func (p *parser) entity(raw []byte, defaultType string, depth int) *Part {
 
 	p.leaves++
 	part.PartID = strconv.Itoa(p.leaves)
-	decoded := decodeTransfer(part.Headers, body)
+	decoded, known := decodeTransfer(part.Headers, body)
+	part.unknownTransfer = !known
 	part.Size = int64(len(decoded))
 	if p.output+part.Size > MaxDecodedOutput {
 		p.truncated = true
@@ -171,9 +175,13 @@ func decodeName(n string) string {
 	return AsText(n)
 }
 
-func decodeTransfer(h Headers, body []byte) []byte {
+// decodeTransfer removes the transfer encoding and reports whether it was
+// one this parser knows; an unknown one leaves the body as it is.
+func decodeTransfer(h Headers, body []byte) ([]byte, bool) {
 	cte, _ := h.Last("Content-Transfer-Encoding")
 	switch strings.ToLower(strings.TrimSpace(unfold(cte))) {
+	case "", "7bit", "8bit", "binary":
+		return body, true
 	case "base64":
 		clean := bytes.Map(func(r rune) rune {
 			if r == '\r' || r == '\n' || r == ' ' || r == '\t' {
@@ -183,19 +191,19 @@ func decodeTransfer(h Headers, body []byte) []byte {
 		}, body)
 		out := make([]byte, base64.StdEncoding.DecodedLen(len(clean)))
 		if n, err := base64.StdEncoding.Decode(out, clean); err == nil {
-			return out[:n]
+			return out[:n], true
 		}
 		// Missing padding or trailing garbage are common in the wild: keep
 		// what decodes before the first invalid byte.
 		raw := bytes.TrimRight(clean, "=")
 		out = make([]byte, base64.RawStdEncoding.DecodedLen(len(raw)))
 		n, _ := base64.RawStdEncoding.Decode(out, raw)
-		return out[:n]
+		return out[:n], true
 	case "quoted-printable":
 		out, _ := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
-		return out
+		return out, true
 	}
-	return body
+	return body, false
 }
 
 // splitMultipart returns the body parts between boundary delimiters,

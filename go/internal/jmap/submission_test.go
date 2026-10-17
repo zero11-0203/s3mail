@@ -194,6 +194,7 @@ func TestSubmissionCreateErrors(t *testing.T) {
 		return `{"identityId":"` + ident + `","emailId":"` + email + `"` + extra + `}`
 	}
 	out := runSubmit(t, s, owner, `[["EmailSubmission/set",{"accountId":"$ACCT","create":{
+		"notObject":5,
 		"noIdent":{"identityId":"Inope","emailId":"`+idD+`"},
 		"noEmail":`+sub("Mzzzzzzzzzzzzzzzzzzzzzzzz", "")+`,
 		"from":`+sub("Meeeeeeeeeeeeeeeeeeeeeeeee", "")+`,
@@ -207,7 +208,7 @@ func TestSubmissionCreateErrors(t *testing.T) {
 	}}, "0"]]`)
 	nc := result(t, out, 0, "EmailSubmission/set")["notCreated"].(map[string]any)
 	want := map[string]string{
-		"noIdent": "invalidProperties", "noEmail": "invalidProperties", "from": "forbiddenFrom", "msgid": "invalidEmail",
+		"notObject": "invalidProperties", "noIdent": "invalidProperties", "noEmail": "invalidProperties", "from": "forbiddenFrom", "msgid": "invalidEmail",
 		"norcpt": "noRecipients", "mailFrom": "forbiddenMailFrom", "badRcpt": "invalidRecipients", "params": "invalidProperties",
 		"sendAt": "invalidProperties", "quota": "overQuota",
 	}

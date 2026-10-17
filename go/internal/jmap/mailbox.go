@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -368,7 +369,7 @@ func mailboxOrder(sorts []comparator) (func(a, b Mailbox) int, *MethodError) {
 		case "sortOrder":
 			cmp = func(a, b Mailbox) int { return compareInt(a.SortOrder, b.SortOrder) }
 		case "name":
-			cmp = func(a, b Mailbox) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) }
+			cmp = func(a, b Mailbox) int { return strings.Compare(casemap(a.Name), casemap(b.Name)) }
 		default:
 			return nil, methodErr("unsupportedSort", s.Property)
 		}
@@ -530,16 +531,16 @@ func page(ids []string, position int64, anchor *string, anchorOffset int64, limi
 		start = max(n+start, 0)
 	}
 	start = min(start, n)
+	// The response limit is returned exactly when the server set one or
+	// changed the requested one (RFC 8620 §5.5).
 	capped := int64(maxQueryLimit)
-	var limitOut *int64
+	limitOut := &capped
 	if limit != nil {
 		if *limit < 0 {
 			return nil, methodErr("invalidArguments", "negative limit")
 		}
-		if *limit < capped {
-			capped = *limit
-		} else {
-			limitOut = &capped
+		if *limit <= capped {
+			capped, limitOut = *limit, nil
 		}
 	}
 	end := min(start+capped, n)
@@ -561,33 +562,47 @@ type setArgs struct {
 }
 
 type setResponse struct {
-	AccountID    string         `json:"accountId"`
-	OldState     string         `json:"oldState"`
-	NewState     string         `json:"newState"`
-	Created      map[string]any `json:"created"`
-	Updated      map[string]any `json:"updated"`
-	Destroyed    []string       `json:"destroyed"`
-	NotCreated   setErrors      `json:"notCreated"`
-	NotUpdated   setErrors      `json:"notUpdated"`
-	NotDestroyed setErrors      `json:"notDestroyed"`
+	AccountID    string           `json:"accountId"`
+	OldState     string           `json:"oldState"`
+	NewState     string           `json:"newState"`
+	Created      nullMap[any]     `json:"created"`
+	Updated      nullMap[any]     `json:"updated"`
+	Destroyed    nullList[string] `json:"destroyed"`
+	NotCreated   setErrors        `json:"notCreated"`
+	NotUpdated   setErrors        `json:"notUpdated"`
+	NotDestroyed setErrors        `json:"notDestroyed"`
 }
 
-// setErrors is a /set response's failures by id. It is null when empty,
-// as RFC 8620 §5.3 allows: clients test it for truthiness, and an empty
-// JSON object is truthy, so {} reads as a failed set.
-type setErrors map[string]*SetError
+// nullMap is a /set or /import result map that is null when empty, as RFC
+// 8620 §5.3 specifies for every success and failure map. Clients test
+// them for truthiness, and an empty JSON object is truthy, so {} reads as
+// a failed set.
+type nullMap[V any] map[string]V
 
-func (e setErrors) MarshalJSON() ([]byte, error) {
-	if len(e) == 0 {
+func (m nullMap[V]) MarshalJSON() ([]byte, error) {
+	if len(m) == 0 {
 		return []byte("null"), nil
 	}
-	return json.Marshal(map[string]*SetError(e))
+	return json.Marshal(map[string]V(m))
 }
+
+// nullList is a result list that is null when empty, like destroyed.
+type nullList[V any] []V
+
+func (l nullList[V]) MarshalJSON() ([]byte, error) {
+	if len(l) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal([]V(l))
+}
+
+// setErrors is a /set response's failures by id.
+type setErrors = nullMap[*SetError]
 
 func newSetResponse(accountID, state string) setResponse {
 	return setResponse{
 		AccountID: accountID, OldState: state, NewState: state,
-		Created: map[string]any{}, Updated: map[string]any{}, Destroyed: []string{},
+		Created: nullMap[any]{}, Updated: nullMap[any]{},
 		NotCreated: setErrors{}, NotUpdated: setErrors{}, NotDestroyed: setErrors{},
 	}
 }
@@ -637,7 +652,8 @@ func (s *Server) commitLoop(ctx context.Context, attempt func(st State) (*model.
 }
 
 func validMailboxName(name string) bool {
-	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > maxMailboxNameSize {
+	// maxSizeMailboxName counts UTF-8 octets (RFC 8621 §1.3.1).
+	if name == "" || !utf8.ValidString(name) || len(name) > maxMailboxNameSize {
 		return false
 	}
 	for _, r := range name {
@@ -655,6 +671,20 @@ type mailboxPatch struct {
 	Role         *string
 	SortOrder    *int64
 	IsSubscribed *bool
+	// ServerSet holds server-set properties the client sent; an update
+	// accepts them when unchanged (RFC 8620 §5.3), a create never does.
+	ServerSet map[string]json.RawMessage
+}
+
+// checkServerSet rejects any server-set property whose value differs
+// from the Mailbox's current one.
+func (p mailboxPatch) checkServerSet(current map[string]any) *SetError {
+	for k, raw := range p.ServerSet {
+		if !sameJSON(raw, current[k]) {
+			return invalidProps("server-set property differs from its current value", k)
+		}
+	}
+	return nil
 }
 
 func parseMailboxPatch(c *call, obj map[string]json.RawMessage) (mailboxPatch, *SetError) {
@@ -704,7 +734,10 @@ func parseMailboxPatch(c *call, obj map[string]json.RawMessage) (mailboxPatch, *
 			}
 			p.IsSubscribed = &v
 		case "id", "totalEmails", "unreadEmails", "totalThreads", "unreadThreads", "myRights":
-			return p, invalidProps("server-set property", k)
+			if p.ServerSet == nil {
+				p.ServerSet = map[string]json.RawMessage{}
+			}
+			p.ServerSet[k] = raw
 		default:
 			return p, invalidProps("unknown property", k)
 		}
@@ -715,7 +748,7 @@ func parseMailboxPatch(c *call, obj map[string]json.RawMessage) (mailboxPatch, *
 // checkMailbox validates m as it would exist in v.
 func checkMailbox(v mailboxView, m Mailbox) *SetError {
 	if !validMailboxName(m.Name) {
-		return invalidProps("name must be 1-255 characters without control characters", "name")
+		return invalidProps("name must be 1-255 UTF-8 octets without control characters", "name")
 	}
 	if m.ParentID != "" {
 		if _, ok := v.byID[m.ParentID]; !ok {
@@ -794,6 +827,9 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 				if serr != nil {
 					return nil, serr
 				}
+				if len(p.ServerSet) > 0 {
+					return nil, invalidProps("server-set property", slices.Sorted(maps.Keys(p.ServerSet))...)
+				}
 				if p.Name == nil {
 					return nil, invalidProps("name is required", "name")
 				}
@@ -826,9 +862,11 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 			}
 			advance(st)
 			c.created[cid] = id
+			// Server-set and defaulted properties (RFC 8620 §5.3).
 			resp.Created[cid] = map[string]any{
 				"id": id, "totalEmails": 0, "unreadEmails": 0, "totalThreads": 0, "unreadThreads": 0,
 				"myRights": mailboxObject(made, model.Counts{})["myRights"], "isSubscribed": made.IsSubscribed, "sortOrder": made.SortOrder,
+				"parentId": nullable(made.ParentID), "role": nil,
 			}
 		}
 	}
@@ -861,6 +899,9 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 			before, ok := v.byID[id]
 			if !ok {
 				return nil, &SetError{Type: "notFound"}
+			}
+			if serr := p.checkServerSet(mailboxObject(before, v.counts[id])); serr != nil {
+				return nil, serr
 			}
 			after := before
 			if p.Name != nil {

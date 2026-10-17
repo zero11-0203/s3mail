@@ -47,11 +47,17 @@ func parseStructure(parts []*Part, multipartType string, inAlternative bool, htm
 			parseStructure(part.SubParts, sub, inAlternative || sub == "alternative", htmlBody, textBody, attachments)
 		case isInline:
 			if multipartType == "alternative" {
+				// An enclosing alternative may already have stopped
+				// filling a list; the pseudo-code would dereference null.
 				switch part.Type {
 				case "text/plain":
-					*textBody = append(*textBody, part)
+					if textBody != nil {
+						*textBody = append(*textBody, part)
+					}
 				case "text/html":
-					*htmlBody = append(*htmlBody, part)
+					if htmlBody != nil {
+						*htmlBody = append(*htmlBody, part)
+					}
 				default:
 					*attachments = append(*attachments, part)
 				}
@@ -97,11 +103,12 @@ type BodyValue struct {
 }
 
 // Value decodes a text part to UTF-8, truncated to maxBytes (0 = no limit)
-// on a character boundary.
+// on a character boundary. An unknown charset or transfer encoding is an
+// encoding problem (RFC 8621 §4.1.4).
 func (p *Part) Value(maxBytes int) BodyValue {
 	s, problem := DecodeCharset(p.Charset, p.content)
 	s = strings.ReplaceAll(s, "\r\n", "\n")
-	v := BodyValue{Value: s, IsEncodingProblem: problem}
+	v := BodyValue{Value: s, IsEncodingProblem: problem || p.unknownTransfer}
 	if maxBytes > 0 && len(s) > maxBytes {
 		cut := maxBytes
 		for cut > 0 && !utf8.RuneStart(s[cut]) {

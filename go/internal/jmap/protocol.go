@@ -42,12 +42,15 @@ func (inv *Invocation) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &raw); err != nil || len(raw) != 3 {
 		return fmt.Errorf("invocation is not a 3-element array")
 	}
-	if err := json.Unmarshal(raw[0], &inv.Name); err != nil {
-		return err
+	// The name and call id are Strings; null would decode as "".
+	var name, callID *string
+	if err := json.Unmarshal(raw[0], &name); err != nil || name == nil {
+		return fmt.Errorf("method name is not a string")
 	}
-	if err := json.Unmarshal(raw[2], &inv.CallID); err != nil {
-		return err
+	if err := json.Unmarshal(raw[2], &callID); err != nil || callID == nil {
+		return fmt.Errorf("method call id is not a string")
 	}
+	inv.Name, inv.CallID = *name, *callID
 	if len(bytes.TrimSpace(raw[1])) == 0 || bytes.TrimSpace(raw[1])[0] != '{' {
 		return fmt.Errorf("arguments are not an object")
 	}
@@ -158,6 +161,9 @@ func (c *call) decode(v any, accountID *string) *MethodError {
 // Validate checks the request envelope before any method runs.
 func (s *Server) validate(req *Request) *Problem {
 	known := map[string]bool{CapCore: true, CapMail: true, CapSubmission: s.Sending != nil}
+	if req.Using == nil {
+		return problem("notRequest", 400, "using is required")
+	}
 	for _, u := range req.Using {
 		if !known[u] {
 			return problem("unknownCapability", 400, "unsupported capability "+strconv.Quote(u))

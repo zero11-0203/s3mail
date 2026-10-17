@@ -6,6 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Field is one header field in message order. Value is the raw text after
@@ -99,7 +102,20 @@ func AsText(raw string) string {
 	if d, err := WordDecoder.DecodeHeader(v); err == nil {
 		v = d
 	}
-	return strings.ToValidUTF8(v, "�")
+	return cleanText(v)
+}
+
+// cleanText makes decoded header text valid UTF-8 without control
+// characters (encoded words can carry NUL and C0/C1 controls; folding
+// leaves tabs, which stay) and in NFC (RFC 8621 §4.1.2.2).
+func cleanText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, "�"))
+	return norm.NFC.String(s)
 }
 
 // Address is a JMAP EmailAddress.
@@ -193,7 +209,7 @@ func parseAddresses(v string) []Address {
 func toAddress(a *mail.Address) Address {
 	addr := Address{Email: a.Address}
 	if a.Name != "" {
-		n := strings.ToValidUTF8(a.Name, "�")
+		n := cleanText(a.Name)
 		addr.Name = &n
 	}
 	return addr

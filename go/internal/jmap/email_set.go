@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -166,8 +167,10 @@ func applyPatch(c *call, m EmailMeta, patch map[string]json.RawMessage) (EmailMe
 		}
 	}
 	for path, raw := range patch {
-		root, key, sub := strings.Cut(path, "/")
-		key = strings.ReplaceAll(strings.ReplaceAll(key, "~1", "/"), "~0", "~")
+		// Nesting is judged on the escaped path: "keywords/a~1b" names
+		// the keyword "a/b" (RFC 8620 §5.3 JSON Pointer).
+		root, escaped, sub := strings.Cut(path, "/")
+		key := strings.ReplaceAll(strings.ReplaceAll(escaped, "~1", "/"), "~0", "~")
 		if sub && whole[root] {
 			return m, &SetError{Type: "invalidPatch", Description: path + " conflicts with " + root}
 		}
@@ -184,7 +187,7 @@ func applyPatch(c *call, m EmailMeta, patch map[string]json.RawMessage) (EmailMe
 				}
 				out.Keywords[strings.ToLower(k)] = true
 			}
-		case root == "keywords" && strings.Contains(key, "/"):
+		case root == "keywords" && strings.Contains(escaped, "/"):
 			return m, &SetError{Type: "invalidPatch", Description: "nested keyword path"}
 		case root == "keywords":
 			if !validKeyword(key) {
@@ -211,7 +214,7 @@ func applyPatch(c *call, m EmailMeta, patch map[string]json.RawMessage) (EmailMe
 				}
 				out.MailboxIDs[resolveMailbox(c, id)] = true
 			}
-		case root == "mailboxIds" && strings.Contains(key, "/"):
+		case root == "mailboxIds" && strings.Contains(escaped, "/"):
 			return m, &SetError{Type: "invalidPatch", Description: "nested mailbox path"}
 		case root == "mailboxIds":
 			set, ok := patchFlag(raw)
@@ -223,11 +226,27 @@ func applyPatch(c *call, m EmailMeta, patch map[string]json.RawMessage) (EmailMe
 			} else {
 				delete(out.MailboxIDs, resolveMailbox(c, key))
 			}
+		case !sub && slices.Contains([]string{"id", "blobId", "threadId", "size"}, root):
+			// Server-set values may be sent back unchanged (RFC 8620 §5.3).
+			current := map[string]any{"id": m.ID, "blobId": rawBlobID(m.ID), "threadId": m.ThreadID, "size": m.Size}
+			if !sameJSON(raw, current[root]) {
+				return m, invalid(root, "server-set property differs from its current value")
+			}
 		default:
 			return m, invalid(root, "property is immutable or unknown")
 		}
 	}
 	return out, nil
+}
+
+// sameJSON reports whether raw encodes the same JSON value as v.
+func sameJSON(raw json.RawMessage, v any) bool {
+	var got, want any
+	b, err := json.Marshal(v)
+	if err != nil || json.Unmarshal(raw, &got) != nil || json.Unmarshal(b, &want) != nil {
+		return false
+	}
+	return reflect.DeepEqual(got, want)
 }
 
 func patchFlag(raw json.RawMessage) (set, ok bool) {

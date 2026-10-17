@@ -36,7 +36,7 @@ func (a *Account) State(ctx context.Context) (model.State, error) {
 		st.Epoch = v
 	}
 	st.Floor, _ = num(out.Item["historyFloor"])
-	st.Email, st.Mailbox, st.Thread, st.Identity, st.Submission = st.Seq, st.Seq, st.Seq, st.Seq, st.Seq
+	st.Email, st.Mailbox, st.Thread, st.Identity, st.Submission, st.Delivery = st.Seq, st.Seq, st.Seq, st.Seq, st.Seq, st.Seq
 	if v, ok := num(out.Item["emailState"]); ok {
 		st.Email = v
 	}
@@ -51,6 +51,9 @@ func (a *Account) State(ctx context.Context) (model.State, error) {
 	}
 	if v, ok := num(out.Item["submissionState"]); ok {
 		st.Submission = v
+	}
+	if v, ok := num(out.Item["deliveryState"]); ok {
+		st.Delivery = v
 	}
 	return st, nil
 }

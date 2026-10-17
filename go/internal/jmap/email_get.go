@@ -60,11 +60,44 @@ func parseHeaderProp(p string) (headerProp, bool) {
 			return headerProp{}, false
 		}
 	}
-	switch h.form {
-	case "asRaw", "asText", "asAddresses", "asGroupedAddresses", "asMessageIds", "asDate", "asURLs":
-		return h, true
+	if !formAllowed(h.name, h.form) {
+		return headerProp{}, false
 	}
-	return headerProp{}, false
+	return h, true
+}
+
+// Header fields RFC 8621 §4.1.2 restricts to particular parsed forms:
+// those defined in RFC 5322 or RFC 2369, mapped to their allowed form.
+// Any other field may use every form; Raw is always allowed.
+var restrictedFields = map[string]string{
+	"subject": "asText", "comments": "asText", "keywords": "asText",
+	"from": "asAddresses", "sender": "asAddresses", "reply-to": "asAddresses", "to": "asAddresses", "cc": "asAddresses", "bcc": "asAddresses",
+	"resent-from": "asAddresses", "resent-sender": "asAddresses", "resent-reply-to": "asAddresses",
+	"resent-to": "asAddresses", "resent-cc": "asAddresses", "resent-bcc": "asAddresses",
+	"message-id": "asMessageIds", "in-reply-to": "asMessageIds", "references": "asMessageIds", "resent-message-id": "asMessageIds",
+	"date": "asDate", "resent-date": "asDate",
+	"list-help": "asURLs", "list-unsubscribe": "asURLs", "list-subscribe": "asURLs", "list-post": "asURLs", "list-owner": "asURLs", "list-archive": "asURLs",
+	"return-path": "", "received": "",
+}
+
+// formAllowed reports whether a header field may be fetched or set in a
+// form; a forbidden form is invalidArguments on fetch (RFC 8621 §4.2).
+func formAllowed(name, form string) bool {
+	switch form {
+	case "asRaw":
+		return true
+	case "asText", "asAddresses", "asGroupedAddresses", "asMessageIds", "asDate", "asURLs":
+	default:
+		return false
+	}
+	allowed, restricted := restrictedFields[strings.ToLower(name)]
+	if !restricted {
+		return true
+	}
+	if form == "asGroupedAddresses" {
+		form = "asAddresses"
+	}
+	return form == allowed
 }
 
 func headerValue(fields mailparse.Headers, h headerProp) any {

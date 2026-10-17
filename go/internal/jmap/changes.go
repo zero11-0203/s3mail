@@ -210,9 +210,10 @@ func queryChangesResult(accountID, oldQS, newQS string, current []string, change
 			resp.Added = append(resp.Added, addedItem{ID: id, Index: i})
 		}
 	}
+	// Unlike /changes, /queryChanges allows maxChanges 0 (RFC 8620 §5.6).
 	if maxChanges != nil {
-		if *maxChanges <= 0 {
-			return nil, methodErr("invalidArguments", "maxChanges must be positive")
+		if *maxChanges < 0 {
+			return nil, methodErr("invalidArguments", "maxChanges must not be negative")
 		}
 		if int64(len(resp.Removed)+len(resp.Added)) > *maxChanges {
 			return nil, methodErr("tooManyChanges", "")

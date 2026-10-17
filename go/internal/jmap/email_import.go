@@ -131,11 +131,11 @@ type importArgs struct {
 }
 
 type importResponse struct {
-	AccountID  string         `json:"accountId"`
-	OldState   string         `json:"oldState"`
-	NewState   string         `json:"newState"`
-	Created    map[string]any `json:"created"`
-	NotCreated setErrors      `json:"notCreated"`
+	AccountID  string       `json:"accountId"`
+	OldState   string       `json:"oldState"`
+	NewState   string       `json:"newState"`
+	Created    nullMap[any] `json:"created"`
+	NotCreated setErrors    `json:"notCreated"`
 }
 
 // emailImport implements Email/import (RFC 8621 §4.8) from uploads or
@@ -155,7 +155,7 @@ func emailImport(ctx context.Context, c *call) (any, *MethodError) {
 	if a.IfInState != nil && !inState(*a.IfInState, start, "Email") {
 		return nil, methodErr("stateMismatch", "")
 	}
-	resp := importResponse{AccountID: a.AccountID, OldState: stateToken(start, "Email"), Created: map[string]any{}, NotCreated: setErrors{}}
+	resp := importResponse{AccountID: a.AccountID, OldState: stateToken(start, "Email"), Created: nullMap[any]{}, NotCreated: setErrors{}}
 	last := start
 	for _, cid := range slices.Sorted(maps.Keys(a.Emails)) {
 		e, st, serr := c.s.importOne(ctx, c, a.Emails[cid])

@@ -12,6 +12,26 @@ Limits of this review:
 - No deployed conformance gate was evaluated.
 - The review is not exhaustive. A method with no finding is not thereby proven conformant.
 
+## Resolution
+
+A follow-up change fixed the findings below. Each fix has a regression test, and each of those tests fails on `d62bc03`. The tests are in `go/internal/jmap/conformance_test.go` and `go/internal/mailparse/mailparse_test.go`, plus updated `TestRequestErrors`, `TestEventSource` and `TestSubmissionCreateErrors`. The [conformance matrix](../specs/jmap-conformance.md) describes the current behaviour.
+
+- **Fixed:**
+  - F1 to F4 and A1 to A11.
+  - F5's forbidden header forms, on fetch and on create.
+  - From F6: the SetError for a non-object submission creation (now `invalidProperties`), the Mailbox `created` defaults, and EventSource ping timing.
+- **Kept on purpose:**
+  - F5's permitted creation leniencies.
+  - `Mailbox/get` with `ids: null` returning every Mailbox, so clients that list mailboxes keep working.
+  - `cannotCalculateChanges` for an oversized single commit.
+  - The busy-retry `serverFail` SetError. Its partial-success caveat has no safer standard alternative.
+  - The extra `Email/parse` defaults.
+  - The unregistered problem types.
+  - `no-store` downloads.
+- **Correction to F1:** `FuzzParse` already exercised `BodyLists` through `Preview`. It just never generated this shape, and the message is now one of its seeds.
+
+The findings below describe `d62bc03` as reviewed.
+
 ## Summary
 
 The implementation follows both RFCs closely. Every method in the conformance matrix exists and is registered under the right capability, and the core sync model is sound. That model covers the state tokens, `/changes` coalescing, `/queryChanges`, result references and per-object `/set` commits. The defects are mostly at the edges: input validation, response shape, header decoding, and one crash.
@@ -45,7 +65,7 @@ The implementation follows both RFCs closely. Every method in the conformance ma
   - `Email/get` builds each Email in a goroutine (`email_get.go:201`), and the code has no `recover()` anywhere. Fetching any body property of that Email crashes the API Lambda instance, every time.
   - `Email/parse` uses the same `buildEmail` call.
   - The search indexer calls `BodyLists()` too, so the message can also block indexing.
-- **Fix direction:** Guard the alternative branch against nil lists. Add the message above as a `mailparse` test and a fuzz seed. Also fuzz `BodyLists`; today `FuzzParse` covers only `Parse`.
+- **Fix direction:** Guard the alternative branch against nil lists. Add the message above as a `mailparse` test and a `FuzzParse` seed.
 
 ## Medium
 

@@ -108,10 +108,10 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 	state := &types.Update{
 		TableName:        &a.Table,
 		Key:              a.key("STATE"),
-		UpdateExpression: aws.String("SET seq = :next, emailState = :e, mailboxState = :m, threadState = :t, identityState = :i, submissionState = :s, epoch = if_not_exists(epoch, :one)"),
+		UpdateExpression: aws.String("SET seq = :next, emailState = :e, mailboxState = :m, threadState = :t, identityState = :i, submissionState = :s, deliveryState = :d, epoch = if_not_exists(epoch, :one)"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":next": n(next.Seq), ":e": n(next.Email), ":m": n(next.Mailbox), ":t": n(next.Thread),
-			":i": n(next.Identity), ":s": n(next.Submission), ":one": n(1),
+			":i": n(next.Identity), ":s": n(next.Submission), ":d": n(next.Delivery), ":one": n(1),
 		},
 	}
 	if prev.Seq == 0 {

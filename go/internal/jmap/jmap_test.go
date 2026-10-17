@@ -430,6 +430,10 @@ func TestRequestErrors(t *testing.T) {
 		"not json":           {`{`, "notJSON"},
 		"not request":        {`{"using":"x"}`, "notRequest"},
 		"no methodCalls":     {`{"using":[]}`, "notRequest"},
+		"no using":           {`{"methodCalls":[]}`, "notRequest"},
+		"null using":         {`{"using":null,"methodCalls":[]}`, "notRequest"},
+		"null call id":       {`{"using":[],"methodCalls":[["Core/echo",{},null]]}`, "notRequest"},
+		"null method name":   {`{"using":[],"methodCalls":[[null,{},"c"]]}`, "notRequest"},
 		"unknown capability": {`{"using":["urn:example:nope"],"methodCalls":[]}`, "unknownCapability"},
 		"too many calls":     {`{"using":[],"methodCalls":[` + strings.TrimSuffix(many, ",") + `]}`, "limitmaxCallsInRequest"},
 		"too large":          {`{"using":[],"methodCalls":[],"x":"` + strings.Repeat("a", MaxSizeRequest) + `"}`, "limitmaxSizeRequest"},
@@ -693,17 +697,45 @@ func TestEventSource(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Headers["Content-Type"] != "text/event-stream" {
 		t.Fatalf("status %d headers %v", resp.StatusCode, resp.Headers)
 	}
+	// closeafter=state skips the initial event and ends after the first
+	// change's event (RFC 8620 §7.3).
 	sc := bufio.NewScanner(resp.Body)
 	var states []string
 	for sc.Scan() {
+		if sc.Text() == ": open" {
+			m.add(EmailMeta{ID: "Mdddddddddddddddddddddddd", MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0}, "x")
+		}
 		if line, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
 			states = append(states, line)
-			if len(states) == 1 {
-				m.add(EmailMeta{ID: "Mdddddddddddddddddddddddd", MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0}, "x")
-			}
 		}
 	}
-	if len(states) != 2 || !strings.Contains(states[0], `"Email":"1-3"`) || !strings.Contains(states[1], `"Email":"1-4"`) {
+	if len(states) != 1 || !strings.Contains(states[0], `"Email":"1-4"`) || !strings.Contains(states[0], `"EmailDelivery":"1-4"`) {
+		t.Errorf("events %v", states)
+	}
+}
+
+func TestEventSourceEmailDelivery(t *testing.T) {
+	s, m := fixture()
+	// The stream ends 15 s before the deadline: 300 ms here.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second+300*time.Millisecond)
+	defer cancel()
+	resp, _ := s.HandleEventSource(ctx, authed("/eventsource", nil, map[string]string{"types": "EmailDelivery", "closeafter": "no"}), Owners{"sub-1": "primary"})
+	sc := bufio.NewScanner(resp.Body)
+	var states []string
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		states = append(states, line)
+		if len(states) == 1 {
+			// A keyword change is not a delivery; a new Email is.
+			run(t, s, owner, `[["Email/set",{"accountId":"$ACCT","update":{"`+idA+`":{"keywords/$seen":true}}},"0"]]`)
+			time.Sleep(50 * time.Millisecond)
+			m.add(EmailMeta{ID: "Mdddddddddddddddddddddddd", MailboxIDs: map[string]bool{"inbox": true}, ReceivedAt: t0}, "x")
+		}
+	}
+	if len(states) != 2 || !strings.Contains(states[0], `"EmailDelivery":"1-3"`) || !strings.Contains(states[1], `{"EmailDelivery":"1-5"}`) {
 		t.Errorf("events %v", states)
 	}
 }

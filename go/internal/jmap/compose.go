@@ -144,7 +144,9 @@ func (cp *composer) topHeaders(obj map[string]json.RawMessage) *SetError {
 		return nil
 	}
 	sentAt := cp.s.now()
-	if raw, ok := obj["sentAt"]; ok && string(raw) != "null" {
+	raw, hasSentAt := obj["sentAt"]
+	hasSentAt = hasSentAt && string(raw) != "null"
+	if hasSentAt {
 		var v string
 		t, err := time.Parse(time.RFC3339, unquote(raw, &v))
 		if err != nil {
@@ -152,7 +154,10 @@ func (cp *composer) topHeaders(obj map[string]json.RawMessage) *SetError {
 		}
 		sentAt = t
 	}
-	if _, custom := obj["header:Date"]; !custom {
+	// Date and Message-ID are generated only when no property names the
+	// field in any form or case (RFC 8621 §4.6); a given sentAt still
+	// conflicts with another Date property.
+	if hasSentAt || !namesHeader(obj, "Date") {
 		if serr := add("sentAt", "Date", sentAt.Format(time.RFC1123Z)); serr != nil {
 			return serr
 		}
@@ -199,11 +204,9 @@ func (cp *composer) topHeaders(obj map[string]json.RawMessage) *SetError {
 			return serr
 		}
 	}
-	if _, ok := seen["message-id"]; !ok {
-		if _, custom := obj["header:Message-ID"]; !custom {
-			if serr := add("messageId", "Message-ID", cp.newMessageID()); serr != nil {
-				return serr
-			}
+	if _, ok := seen["message-id"]; !ok && !namesHeader(obj, "Message-ID") {
+		if serr := add("messageId", "Message-ID", cp.newMessageID()); serr != nil {
+			return serr
 		}
 	}
 	lines, serr := customHeaders(obj, "")
@@ -216,6 +219,21 @@ func (cp *composer) topHeaders(obj map[string]json.RawMessage) *SetError {
 		}
 	}
 	return nil
+}
+
+// namesHeader reports whether a header:* or headers property sets the
+// field, whatever its form or case.
+func namesHeader(obj map[string]json.RawMessage, field string) bool {
+	for k := range obj {
+		if hp, ok := parseHeaderProp(k); ok && strings.EqualFold(hp.name, field) {
+			return true
+		}
+	}
+	var list []struct{ Name string }
+	if raw, ok := obj["headers"]; ok && json.Unmarshal(raw, &list) == nil {
+		return slices.ContainsFunc(list, func(h struct{ Name string }) bool { return strings.EqualFold(h.Name, field) })
+	}
+	return false
 }
 
 func unquote(raw json.RawMessage, v *string) string {
@@ -543,6 +561,11 @@ func (cp *composer) part(raw json.RawMessage, prop string, depth int) (*mimePart
 		if err := json.Unmarshal(obj["subParts"], &list); err != nil || len(list) == 0 {
 			return nil, invalidProps("subParts is a non-empty list", prop)
 		}
+		for _, k := range []string{"partId", "blobId", "charset"} {
+			if raw, ok := obj[k]; ok && string(raw) != "null" {
+				return nil, invalidProps("a multipart part has no "+k, prop)
+			}
+		}
 		subs := make([]*mimePart, 0, len(list))
 		for _, r := range list {
 			p, serr := cp.part(r, prop, depth+1)
@@ -551,7 +574,12 @@ func (cp *composer) part(raw json.RawMessage, prop string, depth int) (*mimePart
 			}
 			subs = append(subs, p)
 		}
-		return multipart(mtype, subs), nil
+		// A multipart keeps its metadata and headers like a leaf does.
+		p := multipart(mtype, subs)
+		if serr := partHeaders(p, obj, prop, strings.Map(dropControls, str("name")), str); serr != nil {
+			return nil, serr
+		}
+		return p, nil
 	}
 	if strings.HasPrefix(mtype, "multipart/") {
 		return nil, invalidProps("a multipart part needs subParts", prop)
@@ -611,9 +639,19 @@ func (cp *composer) part(raw json.RawMessage, prop string, depth int) (*mimePart
 		params["name"] = name
 	}
 	p := &mimePart{mtype: mtype, headers: []headerLine{{"Content-Type", mime.FormatMediaType(mtype, params)}}}
+	if serr := partHeaders(p, obj, prop, name, str); serr != nil {
+		return nil, serr
+	}
+	p.encode(content, partID != "")
+	return p, nil
+}
+
+// partHeaders adds a part's disposition, cid, language, location and
+// header properties after its Content-Type.
+func partHeaders(p *mimePart, obj map[string]json.RawMessage, prop, name string, str func(string) string) *SetError {
 	if d := strings.ToLower(str("disposition")); d != "" {
 		if d != "inline" && d != "attachment" {
-			return nil, invalidProps("disposition is inline or attachment", prop)
+			return invalidProps("disposition is inline or attachment", prop)
 		}
 		dp := map[string]string{}
 		if name != "" {
@@ -623,36 +661,35 @@ func (cp *composer) part(raw json.RawMessage, prop string, depth int) (*mimePart
 	}
 	if cid := str("cid"); cid != "" {
 		if strings.ContainsAny(cid, "<> \t\r\n") {
-			return nil, invalidProps("invalid cid", prop)
+			return invalidProps("invalid cid", prop)
 		}
 		p.headers = append(p.headers, headerLine{"Content-ID", "<" + cid + ">"})
 	}
 	if raw, ok := obj["language"]; ok && string(raw) != "null" {
 		var langs []string
 		if json.Unmarshal(raw, &langs) != nil || slices.ContainsFunc(langs, func(l string) bool { return !validHeaderName(l) }) {
-			return nil, invalidProps("language is a list of tags", prop)
+			return invalidProps("language is a list of tags", prop)
 		}
 		p.headers = append(p.headers, headerLine{"Content-Language", strings.Join(langs, ", ")})
 	}
 	if loc := str("location"); loc != "" {
 		if !validRawValue(loc) {
-			return nil, invalidProps("invalid location", prop)
+			return invalidProps("invalid location", prop)
 		}
 		p.headers = append(p.headers, headerLine{"Content-Location", loc})
 	}
 	lines, serr := customHeaders(obj, prop+"/")
 	if serr != nil {
-		return nil, serr
+		return serr
 	}
 	for _, h := range lines {
 		lower := strings.ToLower(h.name)
 		if lower == "content-transfer-encoding" || slices.ContainsFunc(p.headers, func(x headerLine) bool { return strings.EqualFold(x.name, h.name) }) {
-			return nil, invalidProps(h.name+" is set by the server or by another property", prop)
+			return invalidProps(h.name+" is set by the server or by another property", prop)
 		}
 		p.headers = append(p.headers, headerLine{h.name, h.value})
 	}
-	p.encode(content, partID != "")
-	return p, nil
+	return nil
 }
 
 // encode picks the transfer encoding: text from bodyValues is 7bit or

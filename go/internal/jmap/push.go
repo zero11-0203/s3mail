@@ -22,11 +22,13 @@ const (
 	streamTime = 14*time.Minute + 30*time.Second
 )
 
-var pushTypes = []string{"Email", "Mailbox", "Thread", "Identity", "EmailSubmission"}
+// pushTypes includes the push-only EmailDelivery type (RFC 8621 §1.5).
+var pushTypes = []string{"Email", "Mailbox", "Thread", "Identity", "EmailSubmission", "EmailDelivery"}
 
 // HandleEventSource serves GET /eventsource (RFC 8620 §7.3) by polling the
 // strongly consistent account state. The stream ends at token expiry, on
-// closeafter=state after the first change, or before the Lambda deadline.
+// closeafter=state after its only state event (the first change), or
+// before the Lambda deadline.
 func (s *Server) HandleEventSource(ctx context.Context, req events.APIGatewayProxyRequest, owners Owners) (*events.APIGatewayProxyStreamingResponse, error) {
 	acct, ok := AccountFromRequest(req, owners)
 	if !ok || !acct.has(ScopeRead) {
@@ -115,12 +117,17 @@ func (s *Server) stream(ctx context.Context, w io.Writer, acct Account, last Sta
 	if _, err := io.WriteString(w, ": open\n\n"); err != nil {
 		return err
 	}
-	if len(types) > 0 {
+	// closeafter=state must end after its state event, so it skips the
+	// initial one and waits for a change: an immediate reply would make
+	// long-polling clients reconnect in a tight loop.
+	if len(types) > 0 && !closeAfterState {
 		if err := stateEvent(last, nil); err != nil {
 			return err
 		}
 	}
-	lastWrite, lastPing := time.Now(), time.Now()
+	// lastEvent times pings, which follow the previous event of any kind;
+	// lastWrite times the keepalive comments.
+	lastWrite, lastEvent := time.Now(), time.Now()
 	poll := PollInterval
 	if s.PushPoll > 0 {
 		poll = s.PushPoll
@@ -148,18 +155,18 @@ func (s *Server) stream(ctx context.Context, w io.Writer, acct Account, last Sta
 					if err := stateEvent(st, &prev); err != nil {
 						return err
 					}
-					lastWrite = now
+					lastWrite, lastEvent = now, now
 					if closeAfterState {
 						return nil
 					}
 				}
 			}
 			switch {
-			case ping > 0 && now.Sub(lastPing) >= ping:
+			case ping > 0 && now.Sub(lastEvent) >= ping:
 				if err := send("ping", fmt.Sprintf(`{"@type":"Ping","interval":%d}`, int(ping/time.Second))); err != nil {
 					return err
 				}
-				lastPing, lastWrite = now, now
+				lastEvent, lastWrite = now, now
 			case now.Sub(lastWrite) >= maxQuiet:
 				if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 					return err

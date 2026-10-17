@@ -10,7 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"golang.org/x/text/unicode/norm"
+
+	"github.com/zero11-0203/s3mail/go/internal/model"
 	"github.com/zero11-0203/s3mail/go/internal/search"
 )
 
@@ -188,14 +192,33 @@ func inOther(m EmailMeta, excluded []string) bool {
 	return false
 }
 
-func firstAddress(list []string) string {
+// addressSortKey is the from/to sort key of RFC 8621 §4.4.2: the first
+// address's name, or its email when the name is empty.
+func addressSortKey(list []string) string {
 	if len(list) == 0 {
 		return ""
 	}
-	if a, err := mail.ParseAddress(list[0]); err == nil {
-		return strings.ToLower(a.Address)
+	a, err := mail.ParseAddress(list[0])
+	switch {
+	case err != nil:
+		return casemap(list[0])
+	case strings.TrimSpace(a.Name) != "":
+		return casemap(a.Name)
 	}
-	return strings.ToLower(list[0])
+	return casemap(a.Address)
+}
+
+// subjectSortKey is the base subject (RFC 5256 §2.1), as threading
+// computes it.
+func subjectSortKey(subject string) string {
+	base, _ := model.BaseSubject(subject)
+	return casemap(base)
+}
+
+// casemap is the i;unicode-casemap collation key (RFC 5051): titlecase,
+// then NFKD; keys compare as octet strings.
+func casemap(s string) string {
+	return norm.NFKD.String(strings.Map(unicode.ToTitle, s))
 }
 
 // sortFunc builds the comparator and reports whether it reads other
@@ -206,6 +229,19 @@ func sortFunc(sorts []comparator) (func(a, b emailCtx) int, bool, *MethodError) 
 	}
 	threadDependent := false
 	var cmps []func(a, b emailCtx) int
+	// keyed memoizes a string sort key per Email for one sort.
+	keyed := func(key func(EmailMeta) string) func(a, b emailCtx) int {
+		memo := map[string]string{}
+		get := func(m EmailMeta) string {
+			k, ok := memo[m.ID]
+			if !ok {
+				k = key(m)
+				memo[m.ID] = k
+			}
+			return k
+		}
+		return func(a, b emailCtx) int { return strings.Compare(get(a.m), get(b.m)) }
+	}
 	for _, s := range sorts {
 		if s.Collation != "" && s.Collation != "i;unicode-casemap" {
 			return nil, false, methodErr("unsupportedSort", "collation "+s.Collation)
@@ -219,13 +255,11 @@ func sortFunc(sorts []comparator) (func(a, b emailCtx) int, bool, *MethodError) 
 		case "size":
 			cmp = func(a, b emailCtx) int { return compareInt(a.m.Size, b.m.Size) }
 		case "from":
-			cmp = func(a, b emailCtx) int { return strings.Compare(firstAddress(a.m.From), firstAddress(b.m.From)) }
+			cmp = keyed(func(m EmailMeta) string { return addressSortKey(m.From) })
 		case "to":
-			cmp = func(a, b emailCtx) int { return strings.Compare(firstAddress(a.m.To), firstAddress(b.m.To)) }
+			cmp = keyed(func(m EmailMeta) string { return addressSortKey(m.To) })
 		case "subject":
-			cmp = func(a, b emailCtx) int {
-				return strings.Compare(strings.ToLower(a.m.Subject), strings.ToLower(b.m.Subject))
-			}
+			cmp = keyed(func(m EmailMeta) string { return subjectSortKey(m.Subject) })
 		case "hasKeyword", "allInThreadHaveKeyword", "someInThreadHaveKeyword":
 			if s.Keyword == "" {
 				return nil, false, methodErr("invalidArguments", s.Property+" needs a keyword")

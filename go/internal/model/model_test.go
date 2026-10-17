@@ -35,8 +35,11 @@ func TestPlanCreateIntoNewThread(t *testing.T) {
 	if ef.Change.Created["Email"][0] != "Ma" || ef.Change.Created["Thread"][0] != "Ta" {
 		t.Errorf("change %+v", ef.Change)
 	}
-	if !slices.Equal(ef.Change.Updated["MailboxCounts"], []string{"inbox"}) || !ef.Email || !ef.Mailbox || !ef.Thread {
+	if !slices.Equal(ef.Change.Updated["MailboxCounts"], []string{"inbox"}) || !ef.Email || !ef.Mailbox || !ef.Thread || !ef.Delivery {
 		t.Errorf("types %+v", ef)
+	}
+	if next := ef.Next(State{Seq: 4, Epoch: 1}); next.Delivery != 5 || next.Of("EmailDelivery") != 5 {
+		t.Errorf("delivery state %+v", next)
 	}
 	if ef.MBThreads[MBThreadKey{"inbox", "Ta"}] != (MBThread{1, 1}) {
 		t.Errorf("summary %+v", ef.MBThreads)
