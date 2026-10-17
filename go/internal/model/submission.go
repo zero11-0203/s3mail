@@ -75,6 +75,8 @@ type Submission struct {
 	Blob       BlobRef
 	Size       int64
 	Relay      string
+	// RelayID is the relay's queue id once it accepted the message.
+	RelayID string
 
 	Status        string
 	Attempt       int

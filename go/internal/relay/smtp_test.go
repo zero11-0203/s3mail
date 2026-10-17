@@ -188,7 +188,7 @@ func TestSMTPAccepted(t *testing.T) {
 		s := &server{implicitTLS: implicit}
 		handed := false
 		res := run(t, s, msg, func(context.Context) error { handed = true; return nil })
-		if res.Outcome != Accepted || res.Reply != "250 2.0.0 OK id=1abcde-000001-AB" || !handed {
+		if res.Outcome != Accepted || res.Reply != "250 2.0.0 OK id=1abcde-000001-AB" || res.RelayID != "1abcde-000001-AB" || !handed {
 			t.Fatalf("implicit=%v: %+v", implicit, res)
 		}
 		if !strings.Contains(s.content, "\r\n..leading dot\r\n") {

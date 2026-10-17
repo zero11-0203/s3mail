@@ -411,3 +411,40 @@ func TestComponentSubmissionRecords(t *testing.T) {
 		t.Errorf("change %+v", last)
 	}
 }
+
+func TestComponentDeliveryEvents(t *testing.T) {
+	a := localAccount(t)
+	ctx := context.Background()
+	commit := func(m model.Mutation) error {
+		st, err := a.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = a.Commit(ctx, st, m)
+		return err
+	}
+	sub := model.Submission{ID: "Sa", EmailID: "Ma", RcptTo: []string{"x@example.net"}, Relay: "smtp2go", Status: model.SubmissionAccepted, RelayID: "1q-2w"}
+	sub.SetRecipients("queued", "250 OK id=1q-2w")
+	if err := commit(model.Mutation{Submissions: []model.SubmissionChange{{After: &sub}}}); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok, err := a.SubmissionByRelayID(ctx, "smtp2go", "1q-2w"); err != nil || !ok || id != "Sa" {
+		t.Fatalf("relay index: %q %v %v", id, ok, err)
+	}
+	after := sub.Clone()
+	after.Recipients["x@example.net"] = model.RecipientStatus{Delivered: "yes", SMTPReply: "250 delivered"}
+	m := model.Mutation{
+		Submissions: []model.SubmissionChange{{Before: &sub, After: &after}},
+		Delivery:    &model.DeliveryMarker{Relay: "smtp2go", EventID: "e1", SubmissionID: "Sa", At: time.Now()},
+	}
+	if err := commit(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(m); !errors.Is(err, model.ErrDuplicateEvent) {
+		t.Errorf("replayed event: %v", err)
+	}
+	back, _, _ := a.GetSubmission(ctx, "Sa")
+	if back.Recipients["x@example.net"].Delivered != "yes" || back.RelayID != "1q-2w" {
+		t.Errorf("submission %+v", back)
+	}
+}

@@ -107,6 +107,18 @@ variable "submission_recovery_zip" {
   default     = "../../go/build/submission-recovery/bootstrap.zip"
 }
 
+variable "relay_webhook_zip" {
+  description = "Path to the relay-webhook Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/relay-webhook/bootstrap.zip"
+}
+
+variable "delivery_worker_zip" {
+  description = "Path to the delivery-worker Lambda zip built by make build."
+  type        = string
+  default     = "../../go/build/delivery-worker/bootstrap.zip"
+}
+
 variable "smtp2go_cnames" {
   description = "SMTP2GO sender-domain CNAMEs (DKIM and return path) from its dashboard (set in terraform.tfvars)."
   type = list(object({

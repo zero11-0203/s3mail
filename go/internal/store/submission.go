@@ -36,6 +36,7 @@ type submissionDoc struct {
 	Blob          model.BlobRef                    `json:"blob"`
 	Size          int64                            `json:"size"`
 	Relay         string                           `json:"relay"`
+	RelayID       string                           `json:"relayId,omitempty"`
 	Status        string                           `json:"status"`
 	Attempt       int                              `json:"attempt"`
 	Owner         string                           `json:"owner,omitempty"`
@@ -111,13 +112,17 @@ func (a *Account) sendItems(m model.Mutation, seq int64) []types.TransactWriteIt
 		items = append(items, a.put("SUBMISSION#"+x.ID, map[string]types.AttributeValue{
 			"doc": docAttr(submissionDoc{
 				IdentityID: x.IdentityID, EmailID: x.EmailID, ThreadID: x.ThreadID, MailFrom: x.MailFrom, RcptTo: x.RcptTo,
-				SendAt: x.SendAt, Blob: x.Blob, Size: x.Size, Relay: x.Relay, Status: x.Status, Attempt: x.Attempt,
+				SendAt: x.SendAt, Blob: x.Blob, Size: x.Size, Relay: x.Relay, RelayID: x.RelayID, Status: x.Status, Attempt: x.Attempt,
 				Owner: x.Owner, LeaseUntil: x.LeaseUntil, Handoff: x.Handoff, NextAttemptAt: x.NextAttemptAt,
 				Recipients: x.Recipients, Reservation: x.Reservation, Destroyed: x.Destroyed,
 			}),
 			"status":     s(x.Status),
 			"updatedSeq": n(seq),
 		}, cond))
+		// Delivery reports find their submission by the relay's queue id.
+		if x.RelayID != "" && (c.Before == nil || c.Before.RelayID != x.RelayID) {
+			items = append(items, a.put(relayKey(x.Relay, x.RelayID), map[string]types.AttributeValue{"submissionId": s(x.ID)}, nil))
+		}
 	}
 	for _, at := range m.Attempts {
 		sk := fmt.Sprintf("ATTEMPT#%s#%04d#%02d", at.SubmissionID, at.Attempt, at.Seq)
@@ -126,6 +131,34 @@ func (a *Account) sendItems(m model.Mutation, seq int64) []types.TransactWriteIt
 		}, absent))
 	}
 	return items
+}
+
+func relayKey(relay, id string) string { return "RELAYID#" + relay + "#" + id }
+
+// deliveryItem writes the delivery report's deduplication marker; it
+// follows the quota items so its cancellation can be classified.
+func (a *Account) deliveryItem(d *model.DeliveryMarker) types.TransactWriteItem {
+	return a.put("EVENT#"+d.Relay+"#"+d.EventID, map[string]types.AttributeValue{
+		"submissionId": s(d.SubmissionID), "at": s(sortTime(d.At)),
+	}, absent)
+}
+
+func deliveryDuplicate(tce *types.TransactionCanceledException, m model.Mutation) bool {
+	start := 1
+	if m.Receipt != nil || m.Search != nil {
+		start = 2
+	}
+	return m.Delivery != nil && reason(tce, start+len(m.Quota)) == "ConditionalCheckFailed"
+}
+
+// SubmissionByRelayID finds the submission the relay accepted under id.
+func (a *Account) SubmissionByRelayID(ctx context.Context, relay, id string) (string, bool, error) {
+	var sub string
+	err := a.batchGet(ctx, []string{relayKey(relay, id)}, nil, nil, func(it map[string]types.AttributeValue) error {
+		sub = str(it["submissionId"])
+		return nil
+	})
+	return sub, sub != "", err
 }
 
 // ListIdentities reads every stored identity.
@@ -152,7 +185,7 @@ func decodeSubmission(it map[string]types.AttributeValue) (model.Submission, err
 	}
 	return model.Submission{
 		ID: str(it["SK"])[len("SUBMISSION#"):], IdentityID: d.IdentityID, EmailID: d.EmailID, ThreadID: d.ThreadID,
-		MailFrom: d.MailFrom, RcptTo: d.RcptTo, SendAt: d.SendAt, Blob: d.Blob, Size: d.Size, Relay: d.Relay,
+		MailFrom: d.MailFrom, RcptTo: d.RcptTo, SendAt: d.SendAt, Blob: d.Blob, Size: d.Size, Relay: d.Relay, RelayID: d.RelayID,
 		Status: d.Status, Attempt: d.Attempt, Owner: d.Owner, LeaseUntil: d.LeaseUntil, Handoff: d.Handoff,
 		NextAttemptAt: d.NextAttemptAt, Recipients: d.Recipients, Reservation: d.Reservation, Destroyed: d.Destroyed,
 	}, nil

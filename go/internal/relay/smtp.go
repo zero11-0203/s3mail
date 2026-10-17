@@ -200,12 +200,24 @@ func (r *SMTP) Submit(ctx context.Context, m Message) Result {
 	switch {
 	case err == nil:
 		res.Outcome, res.Stage, res.Reply = Accepted, "final", reply(code, msg)
+		res.RelayID = queueID(msg)
 		return res
 	case code == 0:
 		// The message was transmitted but no reply arrived.
 		return fail("final", Unknown, err.Error())
 	}
 	return fail("final", classify(code), reply(code, msg))
+}
+
+// queueID extracts an "id=<queue id>" token from a final reply, the form
+// SMTP2GO and Exim-based relays use ("250 OK id=1abcde-000001-AB").
+func queueID(msg string) string {
+	for _, f := range strings.Fields(msg) {
+		if v, ok := strings.CutPrefix(f, "id="); ok && v != "" {
+			return strings.TrimRight(v, ".;,")
+		}
+	}
+	return ""
 }
 
 func (c *smtpConn) ehlo(name string) (map[string]string, *string) {

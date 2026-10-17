@@ -72,6 +72,7 @@ module "jmap_api" {
   originals_bucket_arn  = module.mail_inbound.originals_bucket_arn
   ses_key_prefix        = module.mail_inbound.ses_key_prefix
   search_function_arn   = module.search.search_function_arn
+  webhook               = module.mail_outbound.webhook
   sending = {
     domain        = var.domain
     aliases       = [for a in var.mail_aliases : a if a != "canary"]
@@ -107,6 +108,8 @@ module "mail_outbound" {
   dispatcher_zip       = var.outbox_dispatcher_zip
   worker_zip           = var.submission_worker_zip
   recovery_zip         = var.submission_recovery_zip
+  webhook_zip          = var.relay_webhook_zip
+  delivery_zip         = var.delivery_worker_zip
   domain               = var.domain
   relay                = module.relay_smtp2go.relay
   table_name           = module.mail_store.table_name

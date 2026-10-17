@@ -15,3 +15,8 @@ output "function_names" {
 output "role_arns" {
   value = merge({ for k, r in aws_iam_role.fn : k => r.arn }, { authorizer = aws_iam_role.authorizer.arn })
 }
+
+output "webhook_url" {
+  description = "The relay webhook URL, or null."
+  value       = var.webhook == null ? null : "${local.base_url}/webhooks/${var.webhook.relay}"
+}

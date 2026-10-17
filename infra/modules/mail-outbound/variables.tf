@@ -19,6 +19,22 @@ variable "recovery_zip" {
   type        = string
 }
 
+variable "webhook_zip" {
+  description = "Path to the relay-webhook Lambda zip (make build)."
+  type        = string
+}
+
+variable "delivery_zip" {
+  description = "Path to the delivery-worker Lambda zip (make build)."
+  type        = string
+}
+
+variable "webhook_concurrency" {
+  description = "Reserved concurrency of the public webhook receiver."
+  type        = number
+  default     = 2
+}
+
 variable "domain" {
   description = "Mail domain; the worker's SMTP HELO name."
   type        = string

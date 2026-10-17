@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 )
 
 // Envelope is the SMTP envelope of one submission.
@@ -61,6 +62,24 @@ type Result struct {
 	Stage      string
 	Reply      string
 	Recipients map[string]string
+	// RelayID is the relay's queue id for an accepted message, when its
+	// reply names one; delivery events are correlated by it.
+	RelayID string
+}
+
+// DeliveryEvent is a relay's report about one recipient after acceptance,
+// normalized by the relay's adapter (docs/specs/mail-flow.md#outbound-relay-interface).
+type DeliveryEvent struct {
+	Relay string
+	// ID deduplicates redeliveries of the same report.
+	ID        string
+	RelayID   string
+	Recipient string
+	// Delivered is yes, no or queued (a temporary failure the relay
+	// still retries); see RFC 8621 §7.
+	Delivered string
+	Reply     string
+	At        time.Time
 }
 
 // Relay submits one message.

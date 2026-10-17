@@ -6,6 +6,7 @@ package send
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zero11-0203/s3mail/go/internal/model"
@@ -160,6 +161,7 @@ func Finish(sub model.Submission, owner string, attemptN int, res relay.Result, 
 		// delivery report says otherwise.
 		after.Status = model.SubmissionAccepted
 		after.SetRecipients("queued", res.Reply)
+		after.RelayID = res.RelayID
 	case relay.Unknown:
 		after.Status = model.SubmissionUnknown
 		after.SetRecipients("unknown", res.Reply)
@@ -260,4 +262,46 @@ func Resolve(sub model.Submission, outcome string, now time.Time) (*model.Mutati
 	}
 	m.Attempts = []model.Attempt{attempt(&after, recResolved, "owner-"+outcome, "owner", now, "")}
 	return m, nil
+}
+
+// deliveryRank orders recipient states so reports only move forward:
+// a final yes or no is never undone by a later or replayed report.
+func deliveryRank(d string) int {
+	switch d {
+	case "yes", "no":
+		return 2
+	case "queued", "unknown":
+		return 1
+	}
+	return 0
+}
+
+// ApplyDelivery records a relay's report about one recipient of an
+// accepted submission. It returns nil when the report changes nothing:
+// an unknown recipient, or a state that would move backwards.
+func ApplyDelivery(sub model.Submission, ev relay.DeliveryEvent) *model.Mutation {
+	if sub.Status != model.SubmissionAccepted {
+		return nil
+	}
+	var rcpt string
+	for r := range sub.Recipients {
+		if strings.EqualFold(r, ev.Recipient) {
+			rcpt = r
+		}
+	}
+	cur, ok := sub.Recipients[rcpt]
+	if !ok || deliveryRank(cur.Delivered) == 2 || deliveryRank(ev.Delivered) < deliveryRank(cur.Delivered) {
+		return nil
+	}
+	before := sub
+	after := sub.Clone()
+	reply := ev.Reply
+	if reply == "" {
+		reply = cur.SMTPReply
+	}
+	after.Recipients[rcpt] = model.RecipientStatus{Delivered: ev.Delivered, SMTPReply: reply}
+	return &model.Mutation{
+		Submissions: []model.SubmissionChange{{Before: &before, After: &after}},
+		Delivery:    &model.DeliveryMarker{Relay: ev.Relay, EventID: ev.ID, SubmissionID: sub.ID, At: ev.At},
+	}
 }

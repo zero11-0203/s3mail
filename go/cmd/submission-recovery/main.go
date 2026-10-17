@@ -26,7 +26,7 @@ func main() {
 	cfg := searchcmd.Config()
 	r := &send.Recovery{
 		Store:  &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]},
-		Config: &sendcmd.Config{SSM: ssm.NewFromConfig(cfg), Parameter: env["RELAY_PARAMETER"], RelayName: env["RELAY"]},
+		Config: &sendcmd.Config{SSM: ssm.NewFromConfig(cfg), Parameter: env["RELAY_PARAMETER"], RelayName: env["RELAY"], Log: log},
 		Queue:  &sendcmd.Queue{SQS: sqs.NewFromConfig(cfg), QueueURL: env["QUEUE_URL"]},
 		Log:    log,
 	}

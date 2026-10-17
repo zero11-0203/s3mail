@@ -107,6 +107,17 @@ variable "sending" {
   default = null
 }
 
+variable "webhook" {
+  description = "The relay webhook receiver (mail-outbound's webhook output) served unauthenticated at POST /webhooks/<relay>; it checks its own bearer secret. Null serves no webhook."
+  type = object({
+    function_name = string
+    alias_name    = string
+    alias_arn     = string
+    relay         = string
+  })
+  default = null
+}
+
 variable "push_concurrency" {
   description = "Reserved concurrency of the push function: the cap on open EventSource streams."
   type        = number

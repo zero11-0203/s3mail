@@ -49,6 +49,8 @@ func (a *Account) Commit(ctx context.Context, prev model.State, m model.Mutation
 			return model.State{}, model.ErrSearchConflict
 		case quotaFailed(tce, m):
 			return model.State{}, model.ErrOverQuota
+		case deliveryDuplicate(tce, m):
+			return model.State{}, model.ErrDuplicateEvent
 		}
 		return model.State{}, fmt.Errorf("commit canceled: %w", err)
 	}
@@ -141,6 +143,9 @@ func (a *Account) build(prev, next model.State, m model.Mutation, ef model.Effec
 	// so their cancellation reasons can be classified.
 	for _, q := range m.Quota {
 		items = append(items, a.quotaItem(q))
+	}
+	if m.Delivery != nil {
+		items = append(items, a.deliveryItem(m.Delivery))
 	}
 
 	for _, c := range m.Emails {

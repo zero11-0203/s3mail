@@ -2,6 +2,7 @@ package send
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -20,6 +21,18 @@ type memStore struct {
 	quota    map[string]int64
 	attempts []model.Attempt
 	sends    []string
+	events   map[string]bool
+}
+
+func (m *memStore) SubmissionByRelayID(_ context.Context, rl, id string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.subs {
+		if x.Relay == rl && x.RelayID == id && id != "" {
+			return x.ID, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (m *memStore) State(context.Context) (model.State, error) {
@@ -55,6 +68,15 @@ func (m *memStore) Commit(_ context.Context, prev model.State, mu model.Mutation
 		if q.Units > 0 && m.quota[q.Key]+q.Units > q.Limit {
 			return model.State{}, model.ErrOverQuota
 		}
+	}
+	if d := mu.Delivery; d != nil {
+		if m.events == nil {
+			m.events = map[string]bool{}
+		}
+		if m.events[d.EventID] {
+			return model.State{}, model.ErrDuplicateEvent
+		}
+		m.events[d.EventID] = true
 	}
 	for _, q := range mu.Quota {
 		m.quota[q.Key] += q.Units
@@ -310,5 +332,40 @@ func TestReserve(t *testing.T) {
 	}
 	if rel := Release(r); rel[1].Units != -3 {
 		t.Errorf("release %+v", rel)
+	}
+}
+
+func TestDeliveryEvents(t *testing.T) {
+	w, st, _, _, _ := setup(t, relay.Result{Outcome: relay.Accepted, Stage: "final", Reply: "250 OK id=1q-2w", RelayID: "1q-2w"})
+	ctx := context.Background()
+	st.subs["Sa"] = func(x model.Submission) model.Submission { x.Relay = "smtp2go"; return x }(st.subs["Sa"])
+	if err := w.Process(ctx, "Sa"); err != nil || st.subs["Sa"].RelayID != "1q-2w" {
+		t.Fatalf("relay id not recorded: %v %+v", err, st.subs["Sa"])
+	}
+	ev := func(id, rcpt, delivered, reply string) relay.DeliveryEvent {
+		return relay.DeliveryEvent{Relay: "smtp2go", ID: id, RelayID: "1q-2w", Recipient: rcpt, Delivered: delivered, Reply: reply}
+	}
+	steps := []struct {
+		ev      relay.DeliveryEvent
+		applied bool
+		err     error
+	}{
+		{ev("e1", "A@example.net", "queued", "452 full"), true, nil},
+		{ev("e2", "a@example.net", "yes", "250 delivered"), true, nil},
+		{ev("e2", "a@example.net", "yes", "250 delivered"), false, nil},  // replay
+		{ev("e3", "a@example.net", "no", "550 late bounce"), false, nil}, // final states stay
+		{ev("e4", "hidden@example.net", "no", "550 unknown user"), true, nil},
+		{ev("e5", "other@example.net", "yes", ""), false, nil}, // not a recipient
+		{relay.DeliveryEvent{Relay: "smtp2go", ID: "e6", RelayID: "nope", Recipient: "a@example.net", Delivered: "yes"}, false, ErrUncorrelated},
+	}
+	for i, s := range steps {
+		applied, err := ApplyEvent(ctx, st, st, s.ev)
+		if applied != s.applied || !errors.Is(err, s.err) {
+			t.Errorf("step %d: applied=%v err=%v", i, applied, err)
+		}
+	}
+	r := st.subs["Sa"].Recipients
+	if r["a@example.net"] != (model.RecipientStatus{Delivered: "yes", SMTPReply: "250 delivered"}) || r["hidden@example.net"].Delivered != "no" {
+		t.Errorf("recipients %+v", r)
 	}
 }

@@ -14,11 +14,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -89,6 +91,8 @@ type Config struct {
 	// RelayName is the configured relay's name; the parameter must equal it
 	// for sending to run.
 	RelayName string
+	// Log records the parameter value whenever it pauses sending.
+	Log *slog.Logger
 
 	Secrets  *secretsmanager.Client
 	SecretID string
@@ -115,7 +119,15 @@ func (c *Config) Paused(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	return out.Parameter == nil || out.Parameter.Value == nil || *out.Parameter.Value != c.RelayName, nil
+	var value string
+	var version int64
+	if out.Parameter != nil {
+		value, version = aws.ToString(out.Parameter.Value), out.Parameter.Version
+	}
+	if value != c.RelayName && c.Log != nil {
+		c.Log.Info("relay parameter pauses sending", "value", value, "version", version, "relay", c.RelayName)
+	}
+	return value != c.RelayName, nil
 }
 
 // Relay implements send.Config.

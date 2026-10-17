@@ -289,6 +289,15 @@ type Attempt struct {
 	Detail       string
 }
 
+// DeliveryMarker is the durable deduplication record of one relay
+// delivery report (docs/specs/mail-flow.md#webhook-idempotency).
+type DeliveryMarker struct {
+	Relay        string
+	EventID      string
+	SubmissionID string
+	At           time.Time
+}
+
 // Mutation is one guarded commit.
 type Mutation struct {
 	Emails      []EmailChange
@@ -299,10 +308,13 @@ type Mutation struct {
 	Attempts    []Attempt
 	// Send lists submissions to hand to the submission queue through the
 	// outbox.
-	Send    []string
-	Receipt *Receipt
-	Uploads []Upload
-	Events  []Event
+	Send []string
+	// Delivery records a relay delivery report as applied; the commit
+	// fails with ErrDuplicateEvent when it already was.
+	Delivery *DeliveryMarker
+	Receipt  *Receipt
+	Uploads  []Upload
+	Events   []Event
 	// Search registers a published index; it advances the Email state so
 	// clients rerun text queries, without making anything search-dirty.
 	Search *SearchRegistration
@@ -320,6 +332,8 @@ var (
 	ErrTooLarge = errors.New("commit exceeds the transaction limits")
 	// ErrOverQuota means a quota reservation would exceed its limit.
 	ErrOverQuota = errors.New("relay quota exhausted")
+	// ErrDuplicateEvent means the delivery report was already applied.
+	ErrDuplicateEvent = errors.New("delivery event already applied")
 )
 
 var idEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)

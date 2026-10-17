@@ -39,7 +39,7 @@ func main() {
 		Store:     acct,
 		Originals: &store.Originals{S3: s3.NewFromConfig(cfg), Log: log},
 		Config: &sendcmd.Config{
-			SSM: ssm.NewFromConfig(cfg), Parameter: env["RELAY_PARAMETER"], RelayName: env["RELAY"],
+			SSM: ssm.NewFromConfig(cfg), Parameter: env["RELAY_PARAMETER"], RelayName: env["RELAY"], Log: log,
 			Secrets: secretsmanager.NewFromConfig(cfg), SecretID: env["SECRET_ID"],
 			Host: env["SMTP_HOST"], Port: port, HeloName: env["HELO_NAME"],
 		},

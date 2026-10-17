@@ -164,10 +164,34 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `ReadRelayParameter` | `ssm:GetParameter` | `/s3mail/relay` parameter | — |
 | `SendWakeUps` | `sqs:SendMessage` | `s3mail-submit` queue | — |
 
+### `s3mail-outbound-webhook` (Lambda execution role)
+
+- **Module:** `infra/modules/mail-outbound`
+- **Purpose:** the public relay webhook receiver behind `POST /webhooks/smtp2go`: check the bearer secret and persist the body on the delivery queue.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-webhook` log group | — |
+| `ReadWebhookSecret` | `secretsmanager:GetSecretValue` | `s3mail/relay/smtp2go-webhook` secret | — |
+| `PersistNotifications` | `sqs:SendMessage` | `s3mail-delivery` queue | — |
+
+It has no table, mail, relay-credential or other queue access; reserved concurrency 2 bounds abuse of the unauthenticated route.
+
+### `s3mail-outbound-delivery` (Lambda execution role)
+
+- **Module:** `infra/modules/mail-outbound`
+- **Purpose:** apply queued delivery reports to submission delivery status with guarded commits.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-outbound-delivery` log group | — |
+| `ReadAndCommitOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:BatchGetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
+| `ConsumeNotifications` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-delivery` queue | — |
+
 **Excluded for all outbound roles:**
 - No S3 write or delete; only the worker reads originals, by exact version and only under `composed/` and `imported/`.
-- Only the worker reads the relay secret; no role can write the secret or the relay parameter (both are set out of band).
-- Only the dispatcher deletes table items. Worker and recovery commits write STATE, CHANGE, SUBMISSION, ATTEMPT, QUOTA and OUTBOX records and never delete; attempt records are append-only.
+- Only the worker reads the relay credential secret and only the webhook receiver reads the webhook secret; no role can write a secret or the relay parameter (all are set out of band).
+- Only the dispatcher deletes table items. Worker, recovery and delivery commits write STATE, CHANGE, SUBMISSION, ATTEMPT, QUOTA and OUTBOX records and never delete; attempt records are append-only.
 - No `dynamodb:Scan`, SES, SNS, IAM or `sts:AssumeRole`.
 
 ## Resource policies
@@ -189,6 +213,8 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `s3mail-outbound-dispatcher` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-dispatcher` schedule rule |
 | `s3mail-outbound-recovery` `live` alias | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-outbound-recovery` schedule rule |
 | Submission DLQ | — | Redrive allowed only from the submission queue | — |
+| `s3mail-outbound-webhook` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/POST/webhooks/smtp2go` (no gateway authorizer; the function checks the bearer secret) |
+| Delivery DLQ | — | Redrive allowed only from the delivery queue | — |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
 
 Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues; see [the evidence finding](../evidence/phase0-ses-receiving.md#findings).
@@ -196,5 +222,5 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The relay webhook (bounce ingestion), GC and owner-recovery roles. Uploads run in the API role.
+- The GC and owner-recovery roles. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.

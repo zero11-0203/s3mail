@@ -129,6 +129,51 @@ locals {
     }
   }
 
+  # Delivery reports (docs/specs/mail-flow.md#outbound-relay-interface).
+  # The receiver checks the bearer secret and only queues; it has no table
+  # or mail access. The delivery worker applies reports to submissions.
+  webhook_functions = {
+    webhook = {
+      zip         = var.webhook_zip
+      memory      = 128
+      timeout     = 10
+      concurrency = var.webhook_concurrency
+      env         = { SECRET_ID = aws_secretsmanager_secret.webhook.arn, QUEUE_URL = aws_sqs_queue.delivery.url }
+      statements = [
+        {
+          Sid      = "ReadWebhookSecret"
+          Effect   = "Allow"
+          Action   = "secretsmanager:GetSecretValue"
+          Resource = aws_secretsmanager_secret.webhook.arn
+        },
+        {
+          Sid      = "PersistNotifications"
+          Effect   = "Allow"
+          Action   = "sqs:SendMessage"
+          Resource = aws_sqs_queue.delivery.arn
+        },
+      ]
+    }
+    delivery = {
+      zip         = var.delivery_zip
+      memory      = 128
+      timeout     = 30
+      concurrency = null
+      env         = {}
+      statements = [
+        local.commit,
+        {
+          Sid      = "ConsumeNotifications"
+          Effect   = "Allow"
+          Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+          Resource = aws_sqs_queue.delivery.arn
+        },
+      ]
+    }
+  }
+
+  all_functions = merge(local.functions, local.webhook_functions)
+
   assume_lambda = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -165,14 +210,14 @@ resource "aws_ssm_parameter" "relay" {
 # --- Functions ---------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "fn" {
-  for_each = local.functions
+  for_each = local.all_functions
 
   name              = "/aws/lambda/${var.name}-outbound-${each.key}"
   retention_in_days = var.log_retention_days
 }
 
 resource "aws_iam_role" "fn" {
-  for_each = local.functions
+  for_each = local.all_functions
 
   name               = "${var.name}-outbound-${each.key}"
   path               = "/s3mail/"
@@ -180,7 +225,7 @@ resource "aws_iam_role" "fn" {
 }
 
 resource "aws_iam_role_policy" "fn" {
-  for_each = local.functions
+  for_each = local.all_functions
 
   name = "outbound-${each.key}"
   role = aws_iam_role.fn[each.key].id
@@ -199,7 +244,7 @@ resource "aws_iam_role_policy" "fn" {
 }
 
 resource "aws_lambda_function" "fn" {
-  for_each = local.functions
+  for_each = local.all_functions
 
   function_name                  = "${var.name}-outbound-${each.key}"
   role                           = aws_iam_role.fn[each.key].arn
@@ -228,7 +273,7 @@ resource "aws_lambda_function" "fn" {
 }
 
 resource "aws_lambda_alias" "live" {
-  for_each = local.functions
+  for_each = local.all_functions
 
   name             = "live"
   function_name    = aws_lambda_function.fn[each.key].function_name
@@ -322,5 +367,53 @@ resource "aws_lambda_event_source_mapping" "submit" {
   event_source_arn        = aws_sqs_queue.submit.arn
   function_name           = aws_lambda_alias.live["worker"].arn
   batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+# --- Delivery reports --------------------------------------------------------
+
+# The bearer secret SMTP2GO sends in its Authorization header. Terraform
+# creates it empty; the value is generated and set out of band, and a
+# rotation keeps the previous version accepted until the relay is updated.
+resource "aws_secretsmanager_secret" "webhook" {
+  name                    = "${var.name}/relay/${var.relay.name}-webhook"
+  description             = "Bearer secret for ${var.relay.name} delivery webhooks, set out of band."
+  recovery_window_in_days = 7
+}
+
+# Reports are persisted here before the webhook is acknowledged; ones
+# that cannot be parsed or correlated end in the DLQ for inspection.
+resource "aws_sqs_queue" "delivery_dlq" {
+  name                      = "${var.name}-delivery-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+}
+
+resource "aws_sqs_queue" "delivery" {
+  name = "${var.name}-delivery"
+  # Five receives five minutes apart give a report half an hour to find
+  # its submission.
+  visibility_timeout_seconds = 300
+  message_retention_seconds  = 1209600
+  sqs_managed_sse_enabled    = true
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.delivery_dlq.arn
+    maxReceiveCount     = 5
+  })
+}
+
+resource "aws_sqs_queue_redrive_allow_policy" "delivery_dlq" {
+  queue_url = aws_sqs_queue.delivery_dlq.id
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.delivery.arn]
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "delivery" {
+  event_source_arn        = aws_sqs_queue.delivery.arn
+  function_name           = aws_lambda_alias.live["delivery"].arn
+  batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
 }

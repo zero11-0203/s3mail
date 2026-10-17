@@ -31,10 +31,17 @@ mock_provider "aws" {
   }
 }
 
+override_resource {
+  target = aws_secretsmanager_secret.webhook
+  values = { arn = "arn:aws:secretsmanager:us-east-1:111111111111:secret:s3mail/relay/smtp2go-webhook-GhIjKl" }
+}
+
 variables {
   dispatcher_zip       = "tests/fake-lambda.txt"
   worker_zip           = "tests/fake-lambda.txt"
   recovery_zip         = "tests/fake-lambda.txt"
+  webhook_zip          = "tests/fake-lambda.txt"
+  delivery_zip         = "tests/fake-lambda.txt"
   domain               = "example.com"
   relay                = { name = "smtp2go", smtp_host = "mail.example.net", smtp_port = 587 }
   table_name           = "s3mail-mail"
@@ -65,18 +72,27 @@ run "least_privilege" {
   }
 
   assert {
-    condition = alltrue([for k in ["worker", "recovery"] : alltrue([
+    condition = alltrue([for k in ["worker", "recovery", "delivery"] : alltrue([
       for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement : !contains(flatten([st.Action]), "dynamodb:DeleteItem")
     ])])
     error_message = "only the dispatcher deletes, and only to acknowledge outbox entries"
   }
 
   assert {
-    condition = alltrue([for k in ["dispatcher", "recovery"] : alltrue([
+    condition = alltrue([for k in ["dispatcher", "recovery", "delivery"] : alltrue([
       for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement :
       !anytrue([for a in flatten([st.Action]) : startswith(a, "secretsmanager:") || startswith(a, "s3:")])
     ])])
     error_message = "only the worker reads the relay secret or mail content"
+  }
+
+  assert {
+    condition = alltrue([
+      for st in jsondecode(aws_iam_role_policy.fn["webhook"].policy).Statement :
+      !anytrue([for a in flatten([st.Action]) : startswith(a, "dynamodb:") || startswith(a, "s3:")]) &&
+      !contains(flatten([st.Resource]), aws_secretsmanager_secret.relay.arn)
+    ])
+    error_message = "the public webhook receiver has no table, mail or relay-credential access"
   }
 
   assert {
