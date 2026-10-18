@@ -5,6 +5,7 @@ short-lived access tokens to this runtime's workload identity. When it has
 no usable token it returns a consent URL; instead of polling for minutes
 inside an invocation, the run stops with authorization_required and the
 CLI's `agent login` completes consent (docs/specs/agent.md#identity-and-authorization).
+Login passes the CLI's random state through as custom_state.
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ class _NoWait(TokenPoller):
         raise _ConsentPending
 
 
-TokenSource = Callable[[], Awaitable[str]]
+# Takes the login's CSRF state, or None outside login.
+TokenSource = Callable[[str | None], Awaitable[str]]
 
 
 def vault_token_source(settings: Settings, client: IdentityClient | None = None) -> TokenSource:
     identity = client or IdentityClient(settings.region)
 
-    async def token() -> str:
+    async def token(state: str | None = None) -> str:
         workload_token = BedrockAgentCoreContext.get_workload_access_token()
         if not workload_token:
             raise RuntimeError("no workload access token: not running on AgentCore Runtime")
@@ -50,6 +52,9 @@ def vault_token_source(settings: Settings, client: IdentityClient | None = None)
                 agent_identity_token=workload_token,
                 auth_flow="USER_FEDERATION",
                 callback_url=settings.oauth_return_url,
+                # Sent back to the return URL; agent login accepts only a
+                # callback carrying the state it generated.
+                custom_state=state,
                 on_auth_url=urls.append,
                 token_poller=_NoWait(),
             )

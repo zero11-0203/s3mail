@@ -48,6 +48,8 @@ def test_judge_normalizes_numbers_dates_and_short_tokens() -> None:
     assert not judge(q40, "Drafts holds 12 emails.", [])
     q01 = next(q for q in QUESTIONS if q.id == "q01")
     assert judge(q01, "192.00 EUR, due 31 October 2026 [email:E002]", ["E002"])
+    q22 = next(q for q in QUESTIONS if q.id == "q22")
+    assert judge(q22, "On 22 September 2026 at 5:00 p.m. [email:E040]", ["E040"])
 
 
 def test_search_matches_words_and_header_substrings() -> None:

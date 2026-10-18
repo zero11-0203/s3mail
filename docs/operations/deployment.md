@@ -102,9 +102,15 @@ The optional [mail agent](../specs/agent.md) is a separate deployment unit, like
   3. Replace the client secret out of band ([agent client](../specs/security.md#client-registration-and-discovery)): `aws cognito-idp add-user-pool-client-secret` with a custom value, then `aws secretsmanager put-secret-value --secret-id <client_secret_arn> --secret-string file://…` holding `{"client_secret":"…"}` (a private file, not the shell history), then `aws cognito-idp delete-user-pool-client-secret` for the generated secret. Apply `infra/agent` again, still without `image_digest`, to create the repository, key, Memory and credential provider.
   4. Set `agent_callback_url` to `terraform -chdir=infra/agent output -raw callback_url` and apply `infra/main` again.
   5. Create an OpenRouter API key with a credit limit and store it out of band like the client secret: `aws secretsmanager put-secret-value --secret-id <model_key_secret_arn> --secret-string file://…` holding `{"api_key":"…"}`. Enable only no-data-collection providers in the OpenRouter privacy settings as well; the agent also requests that per call.
-  6. Run `make agent-image AGENT_REPO=<repository_url>`, set the printed `image_digest` and apply `infra/agent` again to create the role, runtime and `live` endpoint.
+  6. Run `make agent-image AGENT_REPO=<repository_url>`, set the printed `image_digest` and `live_version = "1"`, and apply `infra/agent` again to create the role, runtime, `live` endpoint and log groups. If the apply reports that a runtime log group already exists, import it as in the log-group step below.
   7. Allow the CLI's login return URL once on the runtime's workload identity, which the runtime creates and Terraform cannot set: `aws bedrock-agentcore-control update-workload-identity --name <name from workload_identity_arn> --allowed-resource-oauth2-return-urls http://localhost:8765/callback`. Then set `S3MAIL_AGENT_RUNTIME_ARN` to the `runtime_arn` output and run `agent login`.
-- **Updates and rollback:** build and apply a new digest; the runtime gets a new version and `live` follows it after the smoke test. Roll back by setting `live_version` to the previous `runtime_version`. The repository keeps the newest ten images.
+- **Updates and rollback:** a release never moves `live` by itself.
+  1. Run `make agent-image`, set the new `image_digest` and apply with `live_version` unchanged. The runtime gets a candidate version (output `candidate_version`), which the `DEFAULT` endpoint serves.
+  2. Smoke-test the candidate: `agent -qualifier DEFAULT ask "How many mailboxes do I have?"`, and `make agent-eval` when prompts, the model, tools or the graph changed.
+  3. Promote: set `live_version` to `candidate_version` and apply. Roll back the same way with an earlier version.
+
+  The repository keeps the newest ten images.
+- **Log groups:** Terraform owns both runtime log groups with 30-day retention. Groups the runtime created before Terraform owned them are imported once: `terraform -chdir=infra/agent import 'module.agent.aws_cloudwatch_log_group.runtime["live"]' /aws/bedrock-agentcore/runtimes/<runtime id>-live`, and the same for `DEFAULT`.
 - **Removal:** destroying `infra/agent` removes the agent and its derived stores only; unset `agent_callback_url` and apply main to remove the client.
 - **Cost attribution:** resources of this root carry the `Component=agent` tag; the optional budget filters on it.
 

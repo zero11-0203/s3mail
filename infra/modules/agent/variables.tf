@@ -96,7 +96,18 @@ variable "max_session_seconds" {
 }
 
 variable "live_version" {
-  description = "Runtime version behind the live endpoint; null follows the latest. Set to roll back."
+  description = "The approved runtime version behind live: \"1\" on the first deployment, then the smoke-tested candidate to promote, or an earlier version to roll back."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.image_uri == null || can(regex("^[0-9]+$", coalesce(var.live_version, "-")))
+    error_message = "With an image, set live_version to the approved runtime version; live never follows a new version by itself."
+  }
+}
+
+variable "log_retention_days" {
+  description = "Retention of the runtime's log groups (docs/operations/monitoring.md)."
+  type        = number
+  default     = 30
 }

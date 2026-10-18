@@ -27,6 +27,15 @@ output "runtime_version" {
   value       = one(aws_bedrockagentcore_agent_runtime_endpoint.live[*].agent_runtime_version)
 }
 
+output "candidate_version" {
+  description = "The newest runtime version, served by the DEFAULT endpoint for the smoke test before promotion."
+  value       = one(aws_bedrockagentcore_agent_runtime.this[*].agent_runtime_version)
+}
+
+output "runtime_id" {
+  value = one(aws_bedrockagentcore_agent_runtime.this[*].agent_runtime_id)
+}
+
 output "workload_identity_arn" {
   description = "The runtime's workload identity; its name takes the allowed OAuth return URL."
   value       = one(flatten([for r in aws_bedrockagentcore_agent_runtime.this : r.workload_identity_details[*].workload_identity_arn]))

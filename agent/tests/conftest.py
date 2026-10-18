@@ -10,7 +10,7 @@ import httpx
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
@@ -142,6 +142,12 @@ def _project(email: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class MethodError(Exception):
+    def __init__(self, type: str) -> None:
+        super().__init__(type)
+        self.type = type
+
+
 class FakeJmap:
     def __init__(self, mailbox: list[dict[str, Any]] | None = None) -> None:
         self.mailbox = mailbox if mailbox is not None else MAILBOX
@@ -175,7 +181,11 @@ class FakeJmap:
             self.calls.append((name, args))
             for key in [k for k in args if k.startswith("#")]:
                 args[key[1:]] = _resolve(results, args.pop(key))
-            out = self.method(name, args)
+            try:
+                out = self.method(name, args)
+            except MethodError as exc:
+                responses.append(["error", {"type": exc.type}, call_id])
+                continue
             results[call_id] = (name, out)
             responses.append([name, out, call_id])
         return httpx.Response(200, json={"methodResponses": responses, "sessionState": "s1"})
@@ -190,6 +200,9 @@ class FakeJmap:
         if name == "Email/get":
             by_id = {e["id"]: e for e in self.mailbox}
             ids = args["ids"]
+            # s3mail refuses an oversized get rather than truncating it.
+            if len(ids) > self.capabilities[CORE]["maxObjectsInGet"]:
+                raise MethodError("requestTooLarge")
             return {
                 "list": [_project(by_id[i], args) for i in ids if i in by_id],
                 "notFound": [i for i in ids if i not in by_id],
@@ -220,6 +233,21 @@ def client(fake: FakeJmap) -> JmapClient:
     return JmapClient(SESSION_URL, "test-token", transport=fake.transport(), backoff=0)
 
 
+def check_transcript(messages: Sequence[BaseMessage]) -> None:
+    """Reject what tool-calling APIs reject: a tool call without a reply
+    before the next turn, or a reply to no pending call."""
+    pending: set[str] = set()
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            assert m.tool_call_id in pending, f"reply to unknown tool call {m.tool_call_id}"
+            pending.discard(m.tool_call_id)
+            continue
+        assert not pending, f"tool calls without replies: {sorted(pending)}"
+        if isinstance(m, AIMessage):
+            pending = {c["id"] for c in m.tool_calls if c["id"]}
+    assert not pending, f"tool calls without replies: {sorted(pending)}"
+
+
 class ScriptedModel(BaseChatModel):
     """Replays scripted AI messages; records what it was sent."""
 
@@ -237,6 +265,7 @@ class ScriptedModel(BaseChatModel):
         return self
 
     def _next(self, messages: list[BaseMessage]) -> ChatResult:
+        check_transcript(messages)
         self.seen.append(list(messages))
         if not self.script:
             raise AssertionError("script exhausted")

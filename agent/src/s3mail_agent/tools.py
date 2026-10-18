@@ -49,9 +49,13 @@ class read_email(_Args):
 
 
 class read_thread(_Args):
-    """Read a whole thread, oldest first, with shortened bodies."""
+    """Read a thread, oldest first, with shortened bodies: the newest 30 emails,
+    or earlier ones with skip_latest."""
 
     thread_id: str = Field(description="The threadId of any email in the thread.")
+    skip_latest: int = Field(
+        0, ge=0, le=10_000, description="Skip this many of the newest emails, to read earlier ones."
+    )
 
 
 class list_mailboxes(_Args):
@@ -168,6 +172,7 @@ async def run_search_mail(client: JmapClient, args: search_mail) -> ToolResult:
         condition["after"] = _utc(args.after)
     if args.before:
         condition["before"] = _utc(args.before)
+    session = await client.session()
     results = await client.call(
         [
             (
@@ -175,7 +180,8 @@ async def run_search_mail(client: JmapClient, args: search_mail) -> ToolResult:
                 {
                     "filter": condition or None,
                     "sort": [{"property": "receivedAt", "isAscending": False}],
-                    "limit": args.limit,
+                    # The dependent Email/get must fit the server's limit.
+                    "limit": min(args.limit, session.max_objects_in_get),
                     "calculateTotal": True,
                 },
             ),
@@ -216,30 +222,43 @@ async def run_read_email(client: JmapClient, args: read_email) -> ToolResult:
 
 
 async def run_read_thread(client: JmapClient, args: read_thread) -> ToolResult:
-    results = await client.call(
-        [
-            ("Thread/get", {"ids": [args.thread_id]}),
-            (
-                "Email/get",
-                {
-                    "#ids": ref("c0", "Thread/get", "/list/*/emailIds"),
-                    "properties": [*HEADER_PROPERTIES, "textBody", "bodyValues"],
-                    "fetchTextBodyValues": True,
-                    "maxBodyValueBytes": THREAD_BODY_BYTES,
-                },
-            ),
-        ]
-    )
-    found = results["c1"]["list"]
+    # Membership first, then only the chosen window, in batches the server
+    # accepts: a long thread never becomes one oversized Email/get.
+    threads = await client.call([("Thread/get", {"ids": [args.thread_id]})])
+    found = threads["c0"].get("list", [])
+    ids: list[str] = found[0]["emailIds"] if found else []
+    end = max(len(ids) - args.skip_latest, 0)
+    window = ids[max(end - THREAD_MAX_EMAILS, 0) : end]
+    session = await client.session()
+    fetched: list[dict[str, Any]] = []
+    not_found: list[str] = []
+    for i in range(0, len(window), session.max_objects_in_get):
+        results = await client.call(
+            [
+                (
+                    "Email/get",
+                    {
+                        "ids": window[i : i + session.max_objects_in_get],
+                        "properties": [*HEADER_PROPERTIES, "textBody", "bodyValues"],
+                        "fetchTextBodyValues": True,
+                        "maxBodyValueBytes": THREAD_BODY_BYTES,
+                    },
+                )
+            ]
+        )
+        fetched.extend(results["c0"]["list"])
+        not_found.extend(results["c0"].get("notFound", []))
     emails = []
-    for email in sorted(found, key=lambda e: e.get("receivedAt") or "")[-THREAD_MAX_EMAILS:]:
+    for email in sorted(fetched, key=lambda e: e.get("receivedAt") or ""):
         body, truncated = _body(email, THREAD_BODY_BYTES)
         emails.append({**_header(email), "body": body, "truncated": truncated})
     payload = {
         "threadId": args.thread_id,
+        "threadSize": len(ids),
         "emails": emails,
-        "omitted": len(found) - len(emails),
-        "notFound": results["c0"].get("notFound", []),
+        "omittedEarlier": max(end - THREAD_MAX_EMAILS, 0),
+        "omittedLater": len(ids) - end,
+        "notFound": [*threads["c0"].get("notFound", []), *not_found],
     }
     return ToolResult(envelope(payload), frozenset(e["id"] for e in emails))
 

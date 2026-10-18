@@ -150,3 +150,20 @@ The full repository `make check` was not run: this change only adds review docum
 The [A0 gate](../specs/agent.md#a0-gate-mvp) remains open. In particular, there is no result here for deployed consent and refresh, write-scope denial with a real A0 token, absence of live secrets after Terraform refresh, the 50-question/30-injection evaluations, an exported telemetry scan, latency/cost baselines, CI apply or the kill-switch rehearsal. The existing five-email fake and scripted responses establish deterministic guard behavior, not real model injection resistance or answer quality. IAM mock assertions do not establish effective deployed permissions; the specified project permissions boundary is also still deferred in bootstrap.
 
 **Diagram impact:** none. This report proposes follow-up work but changes no component, integration, data flow, authorization boundary or deployment stage; the embedded AWS diagram is unchanged.
+
+## Resolution
+
+Added 2026-10-18 after the review; the findings above are unchanged.
+
+| ID | Resolution | Tests |
+| --- | --- | --- |
+| F1 | Every answer needs a checked [evidence marker](../specs/agent.md#answer-evidence) (`[email:<id>]`, `[mailboxes]`, `[searched]` or `[no-mail]`); missing, malformed and unbacked markers get one retry, then `invalid_citations`. `[no-mail]` answers are labelled by the CLI. | `agent/tests/test_graph.py`: missing, malformed, unbacked and stale-follow-up cases |
+| F2 | Transport errors and invalid JSON become retried `JmapError`s; any tool exception closes every pending call. The model sees only earlier questions and accepted answers, so interrupted checkpoints never reach it. | Timeout, retry and interrupted-checkpoint tests; the scripted model now rejects unanswered tool calls |
+| F3 | `read_thread` reads membership, then the newest 30 emails (or earlier ones with `skip_latest`) in batches within `maxObjectsInGet`; search limits are clamped. | 30/64/65-member threads, a smaller server limit, deletion between reads; the fake server enforces its limit |
+| F4 | Token admission before each call (estimate plus completion cap), overrun ends the run before its tool calls or answer, missing usage is charged at the estimate, and context is bounded to ten earlier turns. | Overrun, admission, missing-usage and context-window tests |
+| F5 | `agent login` sends a 256-bit state passed to the vault as `customState`, listens on the runtime's own return URL, and accepts only a GET with that state and a well-formed session URI. `-return-url` is removed. | `go/internal/agentcli`: forged, missing and wrong-method callbacks |
+| F6 | `live` serves only `live_version`, which Terraform requires with an image; new versions are candidates on `DEFAULT` until promoted. | `infra/modules/agent/tests`: a new version does not move `live` |
+| F7 | Terraform owns both runtime log groups with 30-day retention; existing groups are imported. | Retention assertion in the module tests |
+| F8 | The CLI prints answers through `PlainText`, dropping C0/C1 controls, DEL and bidirectional overrides; the policy is in the [client spec](../specs/clients.md#design). | `TestPlainTextDropsTerminalControls` |
+
+Design points: the digest import is now an explicit invariant exception, and the overview status text no longer says nothing is implemented. A3 recovery and approval serialization remain open for that phase.

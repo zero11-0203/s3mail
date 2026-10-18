@@ -112,34 +112,63 @@ func get(t *testing.T, u string) int {
 	return resp.StatusCode
 }
 
+// consentReply is the runtime's login reply pointing at returnURL.
+func consentReply(returnURL string) string {
+	return `{"status":"authorization_required","authorization_url":"https://auth.example.com/consent","return_url":"` + returnURL + `"}`
+}
+
+// loginState is the state the CLI sent in its first invocation.
+func loginState(t *testing.T, f *fakeAPI) string {
+	t.Helper()
+	var p map[string]string
+	if err := json.Unmarshal(f.invokes[0].Payload, &p); err != nil || p["mode"] != "login" || len(p["state"]) < 43 {
+		t.Fatalf("login payload %s", f.invokes[0].Payload)
+	}
+	return p["state"]
+}
+
 func TestLoginCompletesSessionBindingForTheOwner(t *testing.T) {
 	returnURL := freeReturnURL(t)
-	f := &fakeAPI{replies: []string{
-		`{"status":"authorization_required","authorization_url":"https://auth.example.com/consent"}`,
-		`{"status":"ok"}`,
-	}}
+	f := &fakeAPI{replies: []string{consentReply(returnURL), `{"status":"ok"}`}}
+	const session = "urn:ietf:params:oauth:request_uri:ZTRlMTIw"
 	opened := ""
 	open := func(u string) {
 		opened = u
-		// The browser after consent: stray requests first, then the vault redirect.
+		state := loginState(t, f)
+		// The browser after consent: stray and forged requests first, then
+		// the vault redirect.
 		go func() {
 			base := strings.TrimSuffix(returnURL, "/callback")
-			if code := get(t, base+"/other?session_id=x"); code != http.StatusNotFound {
+			if code := get(t, base+"/other?session_id="+session+"&state="+state); code != http.StatusNotFound {
 				t.Errorf("other path: %d", code)
 			}
-			if code := get(t, returnURL); code != http.StatusBadRequest {
-				t.Errorf("no session id: %d", code)
+			for _, q := range []string{
+				"",
+				"?session_id=" + session,
+				"?session_id=" + session + "&state=forged",
+				"?session_id=urn:session:1&state=" + state,
+			} {
+				if code := get(t, returnURL+q); code != http.StatusBadRequest {
+					t.Errorf("%q: %d", q, code)
+				}
 			}
-			get(t, returnURL+"?session_id=urn:session:1")
+			resp, err := http.Post(returnURL+"?session_id="+session+"&state="+state, "text/plain", nil)
+			if err != nil || resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("POST accepted: %v %v", resp, err)
+			}
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			get(t, returnURL+"?session_id="+session+"&state="+state)
 		}()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	needed, err := client(f).Login(ctx, returnURL, open)
+	needed, err := client(f).Login(ctx, open)
 	if err != nil || !needed || opened != "https://auth.example.com/consent" {
 		t.Fatalf("needed %v opened %q err %v", needed, opened, err)
 	}
-	if len(f.completed) != 1 || aws.ToString(f.completed[0].SessionUri) != "urn:session:1" {
+	if len(f.completed) != 1 || aws.ToString(f.completed[0].SessionUri) != session {
 		t.Fatalf("completed %+v", f.completed)
 	}
 	if id, ok := f.completed[0].UserIdentifier.(*types.UserIdentifierMemberUserId); !ok || id.Value != OwnerUserID {
@@ -149,21 +178,43 @@ func TestLoginCompletesSessionBindingForTheOwner(t *testing.T) {
 
 func TestLoginWhenAlreadyAuthorized(t *testing.T) {
 	f := &fakeAPI{replies: []string{`{"status":"ok"}`}}
-	needed, err := client(f).Login(context.Background(), freeReturnURL(t), func(string) { t.Error("opened a browser") })
+	needed, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") })
 	if err != nil || needed || len(f.completed) != 0 {
 		t.Fatalf("needed %v err %v", needed, err)
+	}
+	loginState(t, f)
+}
+
+func TestLoginStatesAreFresh(t *testing.T) {
+	if a, b := NewLoginState(), NewLoginState(); a == b || len(a) != 43 {
+		t.Fatalf("states %q %q", a, b)
 	}
 }
 
 func TestLoginTimesOutWithoutRedirect(t *testing.T) {
-	f := &fakeAPI{replies: []string{`{"status":"authorization_required","authorization_url":"https://auth.example.com/c"}`}}
+	f := &fakeAPI{replies: []string{consentReply(freeReturnURL(t))}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := client(f).Login(ctx, freeReturnURL(t), func(string) {}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := client(f).Login(ctx, func(string) {}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want deadline, got %v", err)
 	}
 	if len(f.completed) != 0 {
 		t.Fatal("completed without a redirect")
+	}
+}
+
+func TestLoginRefusesANonLoopbackReturnURL(t *testing.T) {
+	f := &fakeAPI{replies: []string{consentReply("https://evil.example.com/callback")}}
+	if _, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") }); err == nil {
+		t.Fatal("accepted a remote return URL")
+	}
+}
+
+func TestPlainTextDropsTerminalControls(t *testing.T) {
+	in := "Total \x1b[31m42\x1b[0m EUR\x1b]52;c;cGF3bmVk\x07\r\nnext\tline \u202edesrever\u202c \u0085 \xff 日本語"
+	want := "Total [31m42[0m EUR]52;c;cGF3bmVk\nnext\tline desrever  \ufffd 日本語"
+	if got := PlainText(in); got != want {
+		t.Fatalf("got %q", got)
 	}
 }
 

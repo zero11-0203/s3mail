@@ -51,6 +51,7 @@ variables {
   oauth_issuer     = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
   oauth_client_id  = "agentclient"
   oauth_scopes     = ["s3mail/mail.read"]
+  live_version     = "1"
 }
 
 run "runtime_role_has_no_mail_access" {
@@ -149,11 +150,55 @@ run "stores_are_encrypted_and_expiring" {
   }
 }
 
+run "a_new_version_does_not_move_live" {
+  command   = apply
+  state_key = "release"
+
+  # The runtime is at a new candidate version; live stays on the approved one.
+  override_resource {
+    target = aws_bedrockagentcore_agent_runtime.this[0]
+    values = { agent_runtime_id = "s3mail_agent-abc", agent_runtime_version = "3" }
+  }
+
+  assert {
+    condition     = aws_bedrockagentcore_agent_runtime_endpoint.live[0].agent_runtime_version == "1"
+    error_message = "live stays on live_version"
+  }
+
+  assert {
+    condition     = output.candidate_version == "3"
+    error_message = "the candidate is the runtime's newest version"
+  }
+}
+
+run "live_version_is_required_with_an_image" {
+  command = plan
+
+  variables {
+    live_version = null
+  }
+
+  expect_failures = [var.live_version]
+}
+
+run "runtime_logs_have_bounded_retention" {
+  command = apply
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_log_group.runtime) == 2 &&
+      alltrue([for k, g in aws_cloudwatch_log_group.runtime : g.retention_in_days == 30 && g.name == "/aws/bedrock-agentcore/runtimes/s3mail_agent-abc-${k}"])
+    )
+    error_message = "both endpoint log groups are Terraform-owned with 30-day retention"
+  }
+}
+
 run "no_runtime_without_an_image" {
   command = plan
 
   variables {
-    image_uri = null
+    image_uri    = null
+    live_version = null
   }
 
   assert {

@@ -29,8 +29,13 @@ SETTINGS = Settings(
 SESSION = "cli-00000000-0000-4000-8000-000000000000"
 
 
-def handler(fake: FakeJmap, model: Any, token: Any = None) -> Handler:
-    async def tokens() -> str:
+STATE = "s" * 43
+
+
+def handler(fake: FakeJmap, model: Any, token: Any = None, states: list | None = None) -> Handler:
+    async def tokens(state: str | None = None) -> str:
+        if states is not None:
+            states.append(state)
         if token:
             raise token
         return "vault-token"
@@ -54,11 +59,14 @@ async def test_ask_uses_the_vault_token(scripted: ScriptFactory, fake: FakeJmap)
 
 
 async def test_login_returns_the_consent_url(scripted: ScriptFactory, fake: FakeJmap) -> None:
-    h = handler(fake, scripted(), AuthorizationRequired("https://auth.example.com/consent"))
-    assert await h({"mode": "login"}, SESSION) == {
+    states: list = []
+    h = handler(fake, scripted(), AuthorizationRequired("https://auth.example.com/consent"), states)
+    assert await h({"mode": "login", "state": STATE}, SESSION) == {
         "status": "authorization_required",
         "authorization_url": "https://auth.example.com/consent",
+        "return_url": "http://localhost:8765/callback",
     }
+    assert states == [STATE]
     # An ask never hands out a consent URL.
     assert await h({"mode": "ask", "question": "x"}, SESSION) == {
         "status": "authorization_required"
@@ -89,3 +97,20 @@ async def test_logs_are_content_free(
         assert email["subject"] not in text and email["body"][:20] not in text
     records = [json.loads(r.getMessage()) for r in caplog.records if r.name == "s3mail_agent"]
     assert {r["event"] for r in records} == {"invocation", "invocation_failed"}
+
+
+@pytest.mark.parametrize("state", [None, "", "short", "x" * 129, "bad state with spaces!!", 7])
+async def test_login_needs_a_random_state(
+    scripted: ScriptFactory, fake: FakeJmap, state: Any
+) -> None:
+    states: list = []
+    h = handler(fake, scripted(), states=states)
+    result = await h({"mode": "login", "state": state}, SESSION)
+    assert result == {"status": "error", "error": "bad_request"} and states == []
+
+
+async def test_asks_send_no_login_state(scripted: ScriptFactory, fake: FakeJmap) -> None:
+    states: list = []
+    model = scripted(AIMessage(content="Hello. [no-mail]"))
+    await handler(fake, model, states=states)({"mode": "ask", "question": "Hi?"}, SESSION)
+    assert states == [None]

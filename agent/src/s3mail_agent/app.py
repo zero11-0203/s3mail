@@ -1,6 +1,6 @@
 """AgentCore Runtime entrypoint: serves /invocations and /ping on port 8080.
 
-Payloads: {"mode": "login"} or {"mode": "ask", "question": "..."}. The
+Payloads: {"mode": "login", "state": "<random>"} or {"mode": "ask", "question": "..."}. The
 runtime session id is the LangGraph thread id, so one CLI conversation
 resumes from its last checkpoint on any microVM.
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -30,6 +31,8 @@ log = logging.getLogger("s3mail_agent")
 
 # Runtime session ids are at least 33 characters.
 MIN_SESSION_ID = 33
+# agent login's CSRF state: 128 random bits or more, URL-safe.
+LOGIN_STATE = re.compile(r"[A-Za-z0-9_-]{22,128}")
 
 
 class Handler:
@@ -60,6 +63,8 @@ class Handler:
             result = {"status": "authorization_required"}
             if mode == "login" and exc.url:
                 result["authorization_url"] = exc.url
+                # Where the vault redirects: agent login listens there.
+                result["return_url"] = self.settings.oauth_return_url
         except JmapAuthError as exc:
             result = {"status": "error", "error": "authorization_failed", "http_status": exc.status}
         except JmapError:
@@ -73,7 +78,7 @@ class Handler:
             "status": result["status"],
             "duration_ms": int((time.monotonic() - started) * 1000),
         }
-        for key in ("error", "steps", "tool_calls", "tokens"):
+        for key in ("error", "steps", "tool_calls", "tokens", "evidence"):
             if key in result:
                 record[key] = result[key]
         if "citations" in result:
@@ -85,7 +90,10 @@ class Handler:
         self, mode: Any, payload: dict[str, Any], session_id: str | None
     ) -> dict[str, Any]:
         if mode == "login":
-            await self.token_source()
+            state = payload.get("state")
+            if not isinstance(state, str) or not LOGIN_STATE.fullmatch(state):
+                return {"status": "error", "error": "bad_request"}
+            await self.token_source(state)
             return {"status": "ok"}
         if mode != "ask":
             return {"status": "error", "error": "unsupported_mode"}
@@ -94,7 +102,7 @@ class Handler:
         question = payload.get("question")
         if not isinstance(question, str):
             return {"status": "error", "error": "bad_request"}
-        token = await self.token_source()
+        token = await self.token_source(None)
         async with self.jmap_factory(token) as jmap:
             await jmap.session()
             graph = build_graph(

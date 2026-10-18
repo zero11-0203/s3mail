@@ -2,7 +2,7 @@
 
 [Project README](../README.md) · [Architecture](architecture.md) · [Roadmap](roadmap.md)
 
-**Current state:** This repository contains design documents, not an implemented or deployed mail service. Integrations and acceptance checks remain to be built and proven.
+**Current state:** The design is implemented in part: the Go backend and helpers, the Terraform roots and modules, and the optional Python mail agent, with tests run by `make check`. Parts are deployed for validation. No release gate counts as passed unless its owning spec records the evidence; the [roadmap](roadmap.md) tracks phases.
 
 Start with the [architecture](architecture.md) for the five-minute overview, then the [roadmap](roadmap.md) for implementation order and release gates. Coding agents should also read [AGENTS.md](../AGENTS.md).
 

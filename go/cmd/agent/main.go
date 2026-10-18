@@ -52,9 +52,9 @@ func main() {
 func run() error {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	runtimeARN := fs.String("runtime-arn", os.Getenv("S3MAIL_AGENT_RUNTIME_ARN"), "AgentCore runtime ARN (default $S3MAIL_AGENT_RUNTIME_ARN)")
-	qualifier := fs.String("qualifier", "live", "runtime endpoint")
+	qualifier := fs.String("qualifier", "live", "runtime endpoint: live, or DEFAULT for the newest candidate version")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(fs.Output(), "usage: agent [-runtime-arn ARN] login [-return-url URL] [-no-browser] | ask [-thread ID] QUESTION | version")
+		_, _ = fmt.Fprintln(fs.Output(), "usage: agent [-runtime-arn ARN] [-qualifier live|DEFAULT] login [-no-browser] | ask [-thread ID] QUESTION | version")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -97,15 +97,14 @@ func run() error {
 
 func login(ctx context.Context, c *agentcli.Client, args []string) error {
 	fs := flag.NewFlagSet("agent login", flag.ContinueOnError)
-	returnURL := fs.String("return-url", agentcli.DefaultReturnURL, "return URL allowed on the runtime's workload identity")
 	noBrowser := fs.Bool("no-browser", false, "print the consent URL without opening a browser")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, loginTimeout)
 	defer cancel()
-	needed, err := c.Login(ctx, *returnURL, func(u string) {
-		fmt.Printf("Open this URL to sign in:\n%s\n", u)
+	needed, err := c.Login(ctx, func(u string) {
+		fmt.Printf("Open this URL to sign in:\n%s\n", agentcli.PlainText(u))
 		if !*noBrowser {
 			openBrowser(u)
 		}
@@ -137,7 +136,10 @@ func ask(ctx context.Context, c *agentcli.Client, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(res.Answer)
+	fmt.Println(agentcli.PlainText(res.Answer))
+	if res.NoMail() {
+		fmt.Fprintln(os.Stderr, "\nagent: this answer did not consult your mail.")
+	}
 	fmt.Fprintf(os.Stderr, "\nthread: %s (follow up with -thread)\n", id)
 	return nil
 }

@@ -26,4 +26,4 @@ Keep the diagram's date current when its design changes. Keep the architecture p
 4. Reopen the resulting SVG in draw.io to confirm editability, and render a preview to inspect clipping, overlapping connectors, text and the Phase 4 boundary. Check the image link in `docs/architecture.md`.
 5. State the diagram impact in the commit message (external contributions complete the pull-request checklist). Review changes to both the embedded model and the visible image; an updated date alone does not establish correctness.
 
-The diagram is maintained with repository changes, not synchronized automatically from a live AWS account. The repository currently has no deployed infrastructure to discover.
+The diagram is maintained with repository changes, not synchronized automatically from a live AWS account. Deployed resources exist for validation, but the diagram shows the design; check deployed state with Terraform, not the diagram.

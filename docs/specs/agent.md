@@ -10,7 +10,7 @@
 
 - The agent reaches mail only through the public JMAP API, as an ordinary OAuth client with its own Cognito app client and [scopes](security.md#scopes). It has no IAM access to the mail bucket, mail tables, queues, keys or search index.
 - s3mail remains the only source of truth. The agent stores only derived, expiring data and never writes the search index.
-- No send, move, flag or other mailbox change happens without an explicit owner approval of that exact action. Reply drafts in the Drafts mailbox are the one unapproved write, because they still need the owner to send them.
+- No send, move, flag or other mailbox change happens without an explicit owner approval of that exact action. Two writes need no approval: reply drafts in the Drafts mailbox, which the owner still has to send, and from A2 the digest email imported into the `Agent` mailbox, which only adds a message for the owner to read.
 - No tool can destroy an Email, Mailbox or Identity, in any phase.
 - A submission is attempted at most once per approval. A submission with an unknown result is reported, never retried; s3mail's [no-automatic-resend rule](mail-flow.md#outbound-email) applies to the agent too.
 - All mail content is untrusted data. Instructions found in mail are never followed, and side effects are decided by deterministic code, not by a model.
@@ -55,7 +55,7 @@ One compiled `StateGraph` serves every trigger. A deterministic router picks the
 ```mermaid
 flowchart LR
     IN["Invocation: CLI or EmailReceived"] --> R{"Route by trigger (code)"}
-    R -->|ask| Q1["Agent + read tools (model, capped loop)"] --> Q2["Check citations"] --> Q3["Answer"]
+    R -->|ask| Q1["Agent + read tools (model, capped loop)"] --> Q2["Check evidence"] --> Q3["Answer"]
     R -->|triage, A1| T1["Fetch email"] --> T2["Classify (model)"] --> T3["Write triage row"]
     R -->|digest, A1| D1["Email/changes from cursor"] --> D2["Summarise (model)"] --> D3["Deliver digest"]
     R -->|draft, A2| F1["Read thread"] --> F2["Write reply (model)"] --> F3["Save draft, Drafts only"]
@@ -67,18 +67,34 @@ flowchart LR
 **State** (a typed dict, checkpointed after every step):
 
 - `mode`, `messages` and `request` (the CLI question or the event's ids).
-- `fetched_ids`: every email id a tool returned in this run; the citation check rejects any other cited id.
+- `fetched_ids` and `tools_used`: the email ids and tools that returned results in this run; the [evidence check](#answer-evidence) accepts nothing else.
+- `run_start`: where this run's messages begin in the thread history.
 - `budget`: steps, tokens and tool calls used against per-mode caps (ask: 12 steps; triage: 3 model calls).
 - `proposal`: the action, its exact JMAP arguments and their SHA-256 hash; `approval`: the hash the owner approved and when.
 - `send_key`: the approved hash, also the key of the durable send marker (A3).
 
 **Checkpoints.** `AgentCoreMemorySaver` (from `langgraph-checkpoint-aws`) stores each checkpoint in AgentCore Memory, keyed by `actor_id` (the owner) and `thread_id` (one CLI conversation, or one `EmailReceived` event). Any new session with the same `thread_id` resumes from the latest checkpoint on any microVM. The step order lives in the graph code; the checkpoint records state and the next node.
 
+**Model context.** Each request carries the system prompt, the thread's last ten questions and accepted answers, and the current run's messages. Earlier tool output and tool calls stay in the checkpoint only: old excerpts never count as fresh evidence, history stays bounded, and an interrupted run cannot leave an unanswered tool call in a later request. An interrupted ask is not resumed; the next question starts a new run, which is safe because ask is read-only. Resuming pending work is reserved for the approval interrupt.
+
 **Approval interrupt.** The action node calls `interrupt()` with the proposal and the session may end. `agent approve <id>` resumes the thread with `Command(resume=...)`. LangGraph re-runs an interrupted node from its start, so proposing and executing are separate nodes, and the executor runs only if the resumed hash equals the proposal's hash. Approvals expire after 24 hours, well inside the checkpoint expiry.
 
 **Send-once marker.** LangGraph saves a node's state update only when the node finishes, so a checkpoint flag cannot record a send that crashed mid-node. Before `EmailSubmission/set`, the send node conditionally puts a marker keyed by `send_key` in the agent table. If the marker already exists, the run is a re-run: it does not send, queries `EmailSubmission/query` for the draft and reports the state to the owner.
 
-**Budgets and models.** The recursion limit and `budget` counters end a run with a clear error rather than looping. Both models sit behind one `ChatOpenAI` factory pointed at OpenRouter, so a model change is a configuration change plus an evaluation run.
+**Budgets and models.** The recursion limit and `budget` counters end a run with a clear error rather than looping. The token cap is a hard limit: before each model call, a deliberately high estimate of the request plus the completion cap (2,048 tokens) must fit in the remaining budget, and a reply whose reported usage overruns the cap ends the run before its tool calls or answer are used. Missing usage metadata is charged at the estimate, never as zero. Provider-side retries of a failed request are not metered; OpenRouter's credit limit bounds them. Both models sit behind one `ChatOpenAI` factory pointed at OpenRouter, so a model change is a configuration change plus an evaluation run.
+
+### Answer evidence
+
+Every answer carries at least one evidence marker, and the code checks each one against what ran in this run:
+
+| Marker | Meaning | Accepted when |
+| --- | --- | --- |
+| `[email:<id>]` | The answer relies on this email | A tool returned that id in this run |
+| `[mailboxes]` | Mailbox names or counts | `list_mailboxes` ran in this run |
+| `[searched]` | Searches found nothing relevant | `search_mail` ran in this run |
+| `[no-mail]` | The answer says nothing about mail, such as a clarifying question | Always; the CLI labels the answer as not based on mail |
+
+An answer with no marker, a malformed email marker such as `[email:bad.id]`, or a marker without its tool gets one retry with the reason, then ends with `invalid_citations`. The check proves membership, not support: whether a cited email supports the claim is measured by the [evaluation](#evaluation) judge, which also requires the expected email to be cited.
 
 ### Features
 
@@ -113,13 +129,14 @@ Each tool is a typed Python function over one thin JMAP client; no tool accepts 
 - Batch with result references to keep one tool call to one HTTP request where possible.
 - Fetch text bodies only, with `maxBodyValueBytes` capped at 32 KiB per email; convert HTML to text in the tool. Attachments wait for A4.
 - On `cannotCalculateChanges` or an expired state, fall back to a fresh query.
-- Retry reads on `429` and `5xx` with jittered backoff; never retry a submission.
+- Keep every dependent `Email/get` within the session's `maxObjectsInGet`: search limits are clamped, and threads are read by ids in batches.
+- Retry reads on `429`, `5xx`, timeouts and dropped connections with jittered backoff; never retry a submission.
 
 | Tool | JMAP methods | Scope | Phase | Approval |
 | --- | --- | --- | --- | --- |
 | `search_mail` | `Email/query` (text, from, to, subject, date) + `Email/get` (headers) | `mail.read` | A0 | no |
 | `read_email` | `Email/get` with capped text body values | `mail.read` | A0 | no |
-| `read_thread` | `Thread/get` + `Email/get` | `mail.read` | A0 | no |
+| `read_thread` | `Thread/get`, then `Email/get` for the newest 30 emails (or earlier ones with `skip_latest`) in batches within `maxObjectsInGet` | `mail.read` | A0 | no |
 | `list_mailboxes` | `Mailbox/get` | `mail.read` | A0 | no |
 | `changes_since` | `Email/changes` from the stored cursor | `mail.read` | A1 | no |
 | `save_draft` | `Email/set` create in Drafts with `$draft` and `$seen` | `mail.write` | A2 | no |
@@ -134,7 +151,7 @@ Tool-layer guards are defence in depth; s3mail's per-invocation scope checks rem
 
 - **App client:** the one confidential Cognito app client the [security spec allows](security.md#client-registration-and-discovery), registered in `infra/main` and added to the authorizer allowlist. Authorization code grant only, the token-vault callback as its only redirect URI. Its scopes grow by phase: `s3mail/mail.read` in A0, `mail.write` from A2, `mail.submit` from A3.
 - **Token vault:** an AgentCore Identity custom OAuth2 credential provider points at the Cognito issuer and reads the client secret from the agent's Secrets Manager secret. The owner sets that secret out of band with a custom value and deletes the Cognito-generated one, so no live secret stays in Terraform state. The owner consents once (`agent login`, authorization code); the vault stores the refresh token and returns five-minute access tokens to the runtime's workload identity, refreshing automatically.
-- **Consent and session binding:** a run never waits for consent. When the vault has no usable token, the runtime returns `authorization_required`, and only the `login` mode includes the consent URL. `agent login` opens it and serves the vault's return URL once on `http://localhost:8765/callback`; with the returned session id it calls `CompleteResourceTokenAuth` for the owner's user id with the owner's own AWS credentials, binding the tokens to the same user id the CLI passes on every invocation. The return URL is allowed once on the runtime's workload identity after deployment. Event-driven runs from A1 reuse the stored tokens and never need consent.
+- **Consent and session binding:** a run never waits for consent. When the vault has no usable token, the runtime returns `authorization_required`, and only the `login` mode includes the consent URL. `agent login` sends a fresh 256-bit random state, which the runtime passes to the vault as `customState`; the runtime replies with the consent URL and its configured return URL (`http://localhost:8765/callback`), and the CLI listens there on loopback only. The CLI accepts only a GET that carries that state and a well-formed session URI; anything else is rejected without ending the wait, as [AWS session-binding guidance](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/oauth2-authorization-url-session-binding.html) recommends. Only then does it call `CompleteResourceTokenAuth` for the owner's user id with the owner's own AWS credentials, binding the tokens to the same user id the CLI passes on every invocation. The return URL is allowed once on the runtime's workload identity after deployment. Event-driven runs from A1 reuse the stored tokens and never need consent.
 - **Kill switch:** removing the agent's `client_id` from the allowlist, or revoking its refresh token, stops the agent within one access-token lifetime.
 - **Inbound:** SigV4 only until a non-AWS caller exists; a Cognito JWT inbound authorizer arrives with webmail chat.
 
@@ -174,7 +191,7 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 
 ### Evaluation
 
-The suite (`agent/evals`) runs each case through the runtime's own `Handler` with the pinned model, prompts, tools, budgets and citation check. Only JMAP is simulated: a fake server holds the synthetic mailbox and applies s3mail's [search semantics](search.md#design) (word matching for `text`, header substrings for `from`, `to` and `subject`). No second deployed environment or synthetic account in the one-owner system is needed, and no real mail is involved.
+The suite (`agent/evals`) runs each case through the runtime's own `Handler` with the pinned model, prompts, tools, budgets and evidence check. Only JMAP is simulated: a fake server holds the synthetic mailbox and applies s3mail's [search semantics](search.md#design) (word matching for `text`, header substrings for `from`, `to` and `subject`). No second deployed environment or synthetic account in the one-owner system is needed, and no real mail is involved.
 
 - **Mailbox:** 199 synthetic emails on reserved `example.com`, `example.org` and `example.net` names: 49 fact emails (invoices, travel, appointments, a twelve-message thread, HTML, Japanese, Chinese, Korean, German, French and Spanish), 30 adversarial emails and 120 seeded filler emails across six mailboxes.
 - **Questions (50):** each lists expected facts as groups of accepted spellings (every group must match) and the emails an answer must cite. The judge is deterministic: it folds case, Unicode forms, typographic quotes and thousands separators, so a model is needed only to answer, not to score. Two questions have no answer in the mailbox and expect the agent to say so.
@@ -187,9 +204,9 @@ The suite (`agent/evals`) runs each case through the runtime's own `Handler` wit
 
 - **Code:** `agent/` holds the Python package (3.12, `uv`-locked: `langgraph` 1.x, `langchain-openai`, `langgraph-checkpoint-aws`, `bedrock-agentcore`, `httpx`, `aws-opentelemetry-distro`), its Dockerfile, the synthetic mailbox and the evaluation sets.
 - **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, the model API key secret, and from A1 the EventBridge rule, queue, trigger Lambda and agent table. `infra/main` owns only the agent's Cognito app client and allowlist entry. AWS provider 6.69.1's `aws_bedrockagentcore_*` resources cover every A0 resource. The one gap is the allowed OAuth return URLs of the workload identity the runtime creates for itself, set once with `UpdateWorkloadIdentity`; fall back to `AWS::BedrockAgentCore::*` through a CloudFormation stack only if another gap appears.
-- **Release:** build the ARM64 image separately and pass its digest; a release creates a runtime version and moves `live` after a smoke test. Roll back by moving `live` to the previous version.
+- **Release:** build the ARM64 image separately and pass its digest. Applying it creates a candidate runtime version, which the `DEFAULT` endpoint serves while `live` stays on the approved `live_version`. The owner smoke-tests the candidate with `agent -qualifier DEFAULT`, then promotes it by setting `live_version`; rollback sets an earlier version. Terraform refuses a deployed runtime without `live_version`, so `live` never follows a new version on its own.
 - **CI:** lint, type check, unit and graph tests on every push. CI also checks that the evaluation set is consistent and synthetic. Prompt, model, tool or graph changes run the [evaluation suite](#evaluation) (`make agent-eval`) before release, and a failed threshold blocks the release; CI holds no model key, so the owner runs it.
-- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans and logs token counts per run; model HTTPS calls are not instrumented with content. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. A separate AWS Budget filters on the `Component=agent` tag; it cannot see OpenRouter spend, so the OpenRouter key carries its own credit limit.
+- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans and logs token counts per run; model HTTPS calls are not instrumented with content. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. Terraform owns both endpoint log groups (`DEFAULT` and `live`) with 30-day retention, like every other log group. A separate AWS Budget filters on the `Component=agent` tag; it cannot see OpenRouter spend, so the OpenRouter key carries its own credit limit.
 
 ## Failure handling
 
@@ -197,9 +214,9 @@ The suite (`agent/evals`) runs each case through the runtime's own `Handler` wit
 | --- | --- |
 | Refresh token expired or revoked | Runs stop with `authorization_required`; an alarm fires; the owner re-runs `agent login`. No fallback credential exists. |
 | JMAP `401`/`403` | The run ends without retry; a `403` on a write tool is a guard failure and alarms. |
-| JMAP `429`/`5xx` on a read | Jittered retry within the run budget, then a clear error. |
+| JMAP `429`/`5xx`, timeout or dropped connection on a read | Jittered retry within the run budget, then `jmap_unavailable`. Every pending tool call gets a failure reply, so the thread stays usable. |
 | Unknown submission result | Reported to the owner with the `EmailSubmission/query` state; never retried. |
-| Crash or session timeout | The next invocation of the thread resumes from the last checkpoint; the send marker prevents a second send. |
+| Crash or session timeout | An interrupted ask is abandoned: its pending tool calls stay in the checkpoint but never reach the model, and the next question starts a new run. From A3, an interrupted approval resumes from its checkpoint, and the send marker prevents a second send. |
 | Duplicate or replayed `EmailReceived` | Triage dedupes on the event id; replaying a DLQ message is safe. |
 | Budget exceeded or tool outside the allowlist | The run ends with an error; an allowlist violation alarms as a possible injection. |
 | Agent stores lost | Only derived data is lost; the owner re-runs `agent login`, and triage resumes from new events. |

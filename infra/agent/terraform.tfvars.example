@@ -12,5 +12,8 @@ oauth_scopes     = ["s3mail/mail.read"]
 
 # Unset on the first apply; then the digest printed by make agent-image.
 # image_digest = "sha256:<64 hex>"
+# With an image: "1" on the first deployment, then each smoke-tested
+# candidate_version to promote it.
+# live_version = "1"
 
 # budget = { monthly_usd = 5, email = "owner@example.com" }

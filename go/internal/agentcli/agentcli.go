@@ -8,6 +8,8 @@ package agentcli
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +17,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
@@ -26,10 +31,8 @@ import (
 // runtime uses the same value (agent/src/s3mail_agent/config.py).
 const OwnerUserID = "owner"
 
-// DefaultReturnURL is where the token vault returns after consent. It must
-// be allowed on the runtime's workload identity
-// (docs/operations/deployment.md#agent-deployment).
-const DefaultReturnURL = "http://localhost:8765/callback"
+// sessionURI is the form of the vault's session id on the return URL.
+var sessionURI = regexp.MustCompile(`^urn:ietf:params:oauth:request_uri:[A-Za-z0-9_.~=-]{1,512}$`)
 
 // maxResponse bounds what the CLI reads from one invocation.
 const maxResponse = 1 << 20
@@ -45,11 +48,22 @@ type API interface {
 
 // Result is the runtime's content-free status plus, for ask, the answer.
 type Result struct {
-	Status           string   `json:"status"`
-	Error            string   `json:"error,omitempty"`
-	Answer           string   `json:"answer,omitempty"`
-	Citations        []string `json:"citations,omitempty"`
+	Status    string   `json:"status"`
+	Error     string   `json:"error,omitempty"`
+	Answer    string   `json:"answer,omitempty"`
+	Citations []string `json:"citations,omitempty"`
+	// Evidence kinds: email, mailboxes, search, or none for an answer that
+	// consulted no mail.
+	Evidence         []string `json:"evidence,omitempty"`
 	AuthorizationURL string   `json:"authorization_url,omitempty"`
+	// ReturnURL is where the vault redirects after consent: the loopback
+	// address login listens on, as configured on the runtime.
+	ReturnURL string `json:"return_url,omitempty"`
+}
+
+// NoMail reports whether the answer says it consulted no mail.
+func (r Result) NoMail() bool {
+	return len(r.Evidence) == 1 && r.Evidence[0] == "none"
 }
 
 // Client invokes one runtime endpoint.
@@ -63,6 +77,14 @@ type Client struct {
 // conversation's thread id. AgentCore requires at least 33 characters.
 func NewSessionID() string {
 	return "cli-" + rand.Text() + rand.Text()[:8]
+}
+
+// NewLoginState returns 256 random bits, URL-safe: the CSRF state login
+// sends through the vault and expects back on its callback.
+func NewLoginState() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // Invoke sends one payload on a session.
@@ -116,30 +138,32 @@ func (c *Client) Ask(ctx context.Context, question, thread string) (Result, stri
 }
 
 // Login gets the owner's consent once. It asks the runtime for a consent
-// URL, hands it to open, waits for the vault's redirect to returnURL and
-// completes the session binding for the owner user id. It reports whether
+// URL with a fresh random state, listens on the runtime's return URL, hands
+// the consent URL to open, and completes the session binding for the owner
+// user id only for a callback that carries that state. It reports whether
 // consent was needed.
-func (c *Client) Login(ctx context.Context, returnURL string, open func(string)) (bool, error) {
-	// Listen before invoking, so the redirect cannot arrive first.
-	ln, callback, err := Listen(returnURL)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = ln.Close() }()
-
-	res, err := c.Invoke(ctx, map[string]string{"mode": "login"}, NewSessionID())
+func (c *Client) Login(ctx context.Context, open func(string)) (bool, error) {
+	state := NewLoginState()
+	res, err := c.Invoke(ctx, map[string]string{"mode": "login", "state": state}, NewSessionID())
 	if err != nil {
 		return false, err
 	}
 	switch {
 	case res.Status == "ok":
 		return false, nil
-	case res.Status != "authorization_required" || res.AuthorizationURL == "":
+	case res.Status != "authorization_required" || res.AuthorizationURL == "" || res.ReturnURL == "":
 		return false, fmt.Errorf("login failed: %s", orUnknown(res.Error, res.Status))
 	}
+	// The redirect follows consent in the browser, so listening before
+	// opening the URL is early enough.
+	ln, callback, err := Listen(res.ReturnURL)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = ln.Close() }()
 	open(res.AuthorizationURL)
 
-	session, err := AwaitSession(ctx, ln, callback)
+	session, err := AwaitSession(ctx, ln, callback, state)
 	if err != nil {
 		return true, err
 	}
@@ -150,7 +174,7 @@ func (c *Client) Login(ctx context.Context, returnURL string, open func(string))
 		return true, fmt.Errorf("complete session binding: %w", err)
 	}
 
-	confirmed, err := c.Invoke(ctx, map[string]string{"mode": "login"}, NewSessionID())
+	confirmed, err := c.Invoke(ctx, map[string]string{"mode": "login", "state": NewLoginState()}, NewSessionID())
 	if err != nil {
 		return true, err
 	}
@@ -176,17 +200,23 @@ func Listen(returnURL string) (net.Listener, *url.URL, error) {
 	return ln, u, nil
 }
 
-// AwaitSession serves the vault's redirect and returns its session id.
-// Other paths get 404, and a request without a session id is rejected
-// without ending the wait.
-func AwaitSession(ctx context.Context, ln net.Listener, callback *url.URL) (string, error) {
+// AwaitSession serves the vault's redirect and returns its session URI.
+// Only a GET on the callback path that carries state as a query value and a
+// well-formed session URI is accepted; anything else is rejected without
+// ending the wait, so a stray or forged request cannot consume the login.
+func AwaitSession(ctx context.Context, ln net.Listener, callback *url.URL, state string) (string, error) {
 	done := make(chan string, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc(callback.Path, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		session := r.URL.Query().Get("session_id")
-		if session == "" {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		query := r.URL.Query()
+		session := query.Get("session_id")
+		if !carriesState(query, state) || !sessionURI.MatchString(session) {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprintln(w, "agent: unexpected request ignored.")
 			return
@@ -215,10 +245,47 @@ func AwaitSession(ctx context.Context, ln net.Listener, callback *url.URL) (stri
 	}
 }
 
+// carriesState reports whether some query value other than the session id
+// is exactly state. The vault returns the login's custom state on the
+// return URL; matching any value keeps the check independent of the
+// parameter's name.
+func carriesState(query url.Values, state string) bool {
+	for key, values := range query {
+		if key == "session_id" {
+			continue
+		}
+		for _, v := range values {
+			if subtle.ConstantTimeCompare([]byte(v), []byte(state)) == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PlainText makes runtime output safe to print: answers can quote mail, so
+// terminal controls (C0 except newline and tab, DEL, C1, and bidirectional
+// overrides) are dropped and invalid UTF-8 becomes U+FFFD
+// (docs/specs/clients.md#design).
+func PlainText(s string) string {
+	s = strings.ToValidUTF8(s, string(utf8.RuneError))
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			return -1
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func orUnknown(values ...string) string {
 	for _, v := range values {
 		if v != "" {
-			return v
+			return PlainText(v)
 		}
 	}
 	return "unknown"

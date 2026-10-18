@@ -47,7 +47,7 @@ variable "image_digest" {
 }
 
 variable "live_version" {
-  description = "Runtime version behind live; null follows the latest. Set to roll back."
+  description = "The approved runtime version behind live: \"1\" on the first deployment, then a smoke-tested candidate_version, or an earlier version to roll back."
   type        = string
   default     = null
 }

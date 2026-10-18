@@ -28,6 +28,11 @@ output "runtime_version" {
   value       = module.agent.runtime_version
 }
 
+output "candidate_version" {
+  description = "Newest runtime version, on the DEFAULT endpoint: smoke-test it with agent -qualifier DEFAULT, then set live_version to it."
+  value       = module.agent.candidate_version
+}
+
 output "workload_identity_arn" {
   description = "The runtime's workload identity; allow the login return URL on it once."
   value       = module.agent.workload_identity_arn

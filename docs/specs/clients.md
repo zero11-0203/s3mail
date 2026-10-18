@@ -48,6 +48,8 @@ When Phase 4 starts, pin the upstream commit, adapter release and image digest i
 
 **Client responsibilities:** HTML sanitization, sandboxed message display, blocking remote tracking images and safe snippet rendering belong to clients. The backend preserves raw MIME and implements recipient disposition, parsing limits, blob authorization and safe download headers ([mail flow](mail-flow.md#design)–[JMAP](jmap.md#design)). CLI acceptance covers the terminal client's MIME/external-content behavior; browser HTML/sandbox checks become mandatory when webmail is enabled.
 
+**Terminal output:** project helpers that print text from the server or a model, such as the agent CLI's answers, which can quote mail, print it as plain text. They drop terminal controls (C0 except newline and tab, DEL, C1) and bidirectional overrides, and replace invalid UTF-8, so quoted mail cannot move the cursor, set the clipboard or disguise text.
+
 ## Failure handling
 
 A client incompatibility must be fixed or documented; it cannot weaken the shared protocol/security contract. A failed Phase 4 browser gate leaves webmail disabled. CLI access remains the independent test and access path.
@@ -56,7 +58,7 @@ A client incompatibility must be fixed or documented; it cannot weaken the share
 
 - **Client libraries as drivers:** initially use aerc's pinned JMAP library (verify `go-jmap` by rockorager for the chosen release) plus raw protocol tests. In Phase 4, add a JavaScript client driver and browser tests for the selected webmail. The RFC conformance suite covers required behavior independently of either client.
 - **Record and replay:** capture and scrub aerc HTTP sessions first; add browser recordings when webmail is deployed. Use two independent CLI sessions plus the model tests to exercise shared mailbox state before that stage.
-- **Owner acceptance checklist** ([deployment](../operations/deployment.md#design)) initially covers aerc login/refresh, reading, moves, drafts, attachments, Sent hooks, response-loss reconciliation and search; the protocol helper tests push where needed. Terminal rendering/external-content behavior is checked on aerc. Phase 4 adds browser login/logout/cookies, cross-instance sessions, HTML sanitization/sandboxing, blocked remote images, safe snippets and CLI/browser synchronization. Browser-only checks do not gate the initial CLI release.
+- **Owner acceptance checklist** ([deployment](../operations/deployment.md#design)) initially covers aerc login/refresh, reading, moves, drafts, attachments, Sent hooks, response-loss reconciliation and search; the protocol helper tests push where needed. Terminal rendering/external-content behavior is checked on aerc; the agent CLI's control-character filtering is covered by its unit tests. Phase 4 adds browser login/logout/cookies, cross-instance sessions, HTML sanitization/sandboxing, blocked remote images, safe snippets and CLI/browser synchronization. Browser-only checks do not gate the initial CLI release.
 
 ### Browser release gate (Phase 4)
 

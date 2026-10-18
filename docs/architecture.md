@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Roadmap](roadmap.md)
 
-**Status:** Proposed architecture; implementation and validation are pending.  
+**Status:** Proposed architecture, implemented in part and deployed for validation; release gates are pending (see the [roadmap](roadmap.md)).  
 
 ## Overview
 

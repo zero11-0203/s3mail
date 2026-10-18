@@ -10,7 +10,8 @@ The optional, read-only mail assistant (phase A0 of the [agent spec](../docs/spe
 | --- | --- |
 | `src/s3mail_agent/jmap.py` | Read-only JMAP client: session discovery, batched calls with result references, read retries; refuses any method or argument outside the allowlist |
 | `src/s3mail_agent/tools.py` | `search_mail`, `read_email`, `read_thread`, `list_mailboxes`: typed arguments, text bodies capped at 32 KiB, output wrapped as untrusted data |
-| `src/s3mail_agent/graph.py` | The `StateGraph`: code router, model and tool loop under step, tool-call and token budgets, citation check |
+| `src/s3mail_agent/graph.py` | The `StateGraph`: code router, model and tool loop under step, tool-call and token budgets, bounded model context, evidence check |
+| `src/s3mail_agent/citations.py` | The answer evidence markers and their check |
 | `src/s3mail_agent/app.py` | AgentCore entrypoint (`login` and `ask` modes), content-free logs, Memory checkpointer |
 | `src/s3mail_agent/models.py` | The one model factory: OpenRouter's OpenAI-compatible API with `data_collection: deny` routing; reads the owner-set API key |
 | `src/s3mail_agent/identity.py` | Owner token from the vault; returns the consent URL instead of polling |

@@ -2,8 +2,8 @@
 
 ## Current state
 
-- This repository currently contains design documents only.
-- Application code, Terraform modules and automated test commands are planned.
+- The design is implemented in part: Go backend and helpers (`go/`), Terraform roots and modules (`infra/`) and the optional Python agent (`agent/`); `make check` runs the tests.
+- Parts are deployed for validation; phase status lives in `docs/roadmap.md`.
 - Do not claim a design gate has passed without implementation evidence.
 - Start with `README.md`, then `docs/README.md` and `docs/architecture.md`.
 - Read `docs/roadmap.md` before choosing implementation scope or priority.

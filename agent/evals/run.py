@@ -56,6 +56,7 @@ def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).casefold().replace("*", "").replace("`", "")
     text = text.translate(str.maketrans("\u2018\u2019\u201c\u201d", "''\"\""))
     text = re.sub("(?<=\\d)[,\u202f ](?=\\d{3}(?!\\d))", "", text)  # thousands separators
+    text = re.sub(r"\b([ap])\.m\.", r"\1m", text)  # 5:00 p.m. -> 5:00 pm
     return re.sub(r"\s+", " ", text)
 
 
@@ -118,7 +119,7 @@ class Runner:
             model = chat_model(self.settings.ask_model, self.api_key, self.settings.model_base_url)
             model.callbacks = [usage]
 
-            async def token() -> str:
+            async def token(state: str | None = None) -> str:
                 return "eval-token"
 
             handler = Handler(

@@ -95,17 +95,32 @@ class JmapClient:
         await self._http.aclose()
 
     async def _send(self, method: str, url: str, **kwargs: Any) -> Any:
+        # Every request is a guarded read, so retrying after a timeout or a
+        # dropped connection cannot repeat a change.
         for attempt in range(self._retries + 1):
-            response = await self._http.request(method, url, **kwargs)
+            last = attempt == self._retries
+            try:
+                response = await self._http.request(method, url, **kwargs)
+            except httpx.TransportError as exc:
+                if last:
+                    raise JmapError(f"JMAP transport failed: {type(exc).__name__}") from exc
+                await self._pause(attempt)
+                continue
             if response.status_code in (401, 403):
                 raise JmapAuthError(response.status_code)
-            if response.status_code in _RETRY_STATUSES and attempt < self._retries:
-                await asyncio.sleep(self._backoff * (2**attempt) * random.uniform(0.5, 1.5))  # noqa: S311
+            if response.status_code in _RETRY_STATUSES and not last:
+                await self._pause(attempt)
                 continue
             if response.status_code != 200:
                 raise JmapError(f"JMAP returned {response.status_code}")
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise JmapError("JMAP returned invalid JSON") from exc
         raise AssertionError("unreachable")
+
+    async def _pause(self, attempt: int) -> None:
+        await asyncio.sleep(self._backoff * (2**attempt) * random.uniform(0.5, 1.5))  # noqa: S311
 
     async def session(self) -> Session:
         """Discover the session; refuse to start without the mail capability."""

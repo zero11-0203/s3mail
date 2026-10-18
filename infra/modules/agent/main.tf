@@ -267,12 +267,24 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   depends_on = [aws_iam_role_policy.runtime]
 }
 
-# Releases move live to the new version after a smoke test; rollback moves
-# it back (docs/specs/agent.md#deployment-and-operations).
+# live serves only the approved version. A new image or setting creates a
+# candidate version, which the DEFAULT endpoint serves for the smoke test;
+# promotion and rollback set live_version
+# (docs/operations/deployment.md#agent-deployment).
 resource "aws_bedrockagentcore_agent_runtime_endpoint" "live" {
   count = local.deployed ? 1 : 0
 
   name                  = "live"
   agent_runtime_id      = aws_bedrockagentcore_agent_runtime.this[0].agent_runtime_id
-  agent_runtime_version = coalesce(var.live_version, aws_bedrockagentcore_agent_runtime.this[0].agent_runtime_version)
+  agent_runtime_version = var.live_version
+}
+
+# The runtime writes one log group per endpoint. Terraform owns them so
+# retention is bounded (docs/operations/monitoring.md); existing groups are
+# imported once (docs/operations/deployment.md#agent-deployment).
+resource "aws_cloudwatch_log_group" "runtime" {
+  for_each = local.deployed ? toset(["DEFAULT", "live"]) : toset([])
+
+  name              = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.this[0].agent_runtime_id}-${each.key}"
+  retention_in_days = var.log_retention_days
 }
