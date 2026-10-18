@@ -45,6 +45,8 @@ ignore = ["S101"]
 # Fixture data: whole synthetic emails read better unwrapped.
 "evals/mailbox.py" = ["E501"]
 "evals/triage_cases.py" = ["E501"]
+# Also a fake other-thread code (S105) and Chinese full-width punctuation (RUF001).
+"evals/draft_cases.py" = ["E501", "S105", "RUF001"]
 
 [tool.mypy]
 python_version = "3.12"

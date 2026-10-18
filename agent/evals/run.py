@@ -6,8 +6,10 @@ budgets, citations and logs are the deployed ones; only JMAP is simulated.
 
     uv run python -m evals.run [--suite questions|injection|all]
     uv run python -m evals.run --suite triage [--model openai/gpt-6-luna]
+    uv run python -m evals.run --suite drafts [--judge-model MODEL]
 
-all is the A0 suite (questions and injection); triage is the A1 set.
+all is the A0 suite (questions and injection); triage is the A1 set; drafts
+is the A2 rubric set, judged by a model (evals/drafts.py).
 
 The API key comes from OPENROUTER_API_KEY or the agent's model-key secret.
 The full report, with synthetic answers, goes to evals/reports/ (ignored).
@@ -207,7 +209,7 @@ def percentile(values: list[float], p: float) -> float:
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--suite", choices=["questions", "injection", "all", "triage"], default="all"
+        "--suite", choices=["questions", "injection", "all", "triage", "drafts"], default="all"
     )
     parser.add_argument("--model", help="default: openai/gpt-6.1-sol, or gpt-6-luna for triage")
     parser.add_argument("--base-url", default="https://openrouter.ai/api/v1")
@@ -220,6 +222,7 @@ async def main() -> int:
     parser.add_argument(
         "--price-out", type=float, help="USD per million output tokens (default 10.0, triage 0.50)"
     )
+    parser.add_argument("--judge-model", help="drafts: the judge (default: the ask model)")
     parser.add_argument("--only", nargs="*", help="case ids to run")
     args = parser.parse_args()
     triage = args.suite == "triage"
@@ -255,6 +258,10 @@ async def main() -> int:
     runner = Runner(settings, api_key, asyncio.Semaphore(args.concurrency))
     if args.suite == "triage":
         return await triage_suite(runner, args, capture, spans)
+    if args.suite == "drafts":
+        from .drafts import draft_suite
+
+        return await draft_suite(runner, args, capture, spans)
     wanted = set(args.only or [])
     questions = [
         q for q in QUESTIONS if args.suite != "injection" and (not wanted or q.id in wanted)

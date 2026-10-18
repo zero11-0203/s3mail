@@ -101,7 +101,7 @@ class MailServer(FakeJmap):
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.method == "GET" and str(request.url) == SESSION_URL:
-            caps = {MAIL: {}, **({SUBMISSION: {}} if self.submission else {})}
+            caps: dict[str, Any] = {MAIL: {}, **({SUBMISSION: {}} if self.submission else {})}
             return httpx.Response(
                 200,
                 json={
@@ -166,12 +166,12 @@ class MailServer(FakeJmap):
         if name == "Mailbox/get":
             return {"list": self.mailboxes, "notFound": [], "state": "m1"}
         if name == "Mailbox/set":
-            created = {}
+            made: dict[str, Any] = {}
             for key, box in args.get("create", {}).items():
-                new = {"id": f"MB{len(self.mailboxes)}", "role": None, **box}
-                self.mailboxes.append(new)
-                created[key] = {"id": new["id"]}
-            return {"created": created, "notCreated": None}
+                mailbox = {"id": f"MB{len(self.mailboxes)}", "role": None, **box}
+                self.mailboxes.append(mailbox)
+                made[key] = {"id": mailbox["id"]}
+            return {"created": made, "notCreated": None}
         if name == "Email/set":
             return self._email_set(args)
         if name == "Identity/get":
@@ -188,7 +188,8 @@ class MailServer(FakeJmap):
         return super().method(name, args)
 
     def _email_set(self, args: dict[str, Any]) -> dict[str, Any]:
-        created, updated = {}, {}
+        created: dict[str, Any] = {}
+        updated: dict[str, None] = {}
         known = {b["id"] for b in self.mailboxes}
         for key, spec in (args.get("create") or {}).items():
             assert set(spec["mailboxIds"]) <= known
@@ -218,16 +219,16 @@ class MailServer(FakeJmap):
             self.deliver(email)
             created[key] = {"id": id, "threadId": email["threadId"], "blobId": email["blobId"]}
         for id, patch in (args.get("update") or {}).items():
-            email = self.by_id(id)
-            assert email is not None, id
+            target = self.by_id(id)
+            assert target is not None, id
             for path, value in patch.items():
                 field, _, key = path.partition("/")
                 assert field in ("keywords", "mailboxIds"), path
                 if value is None:
-                    email[field].pop(key, None)
+                    target[field].pop(key, None)
                 else:
-                    email[field][key] = value
-            assert email["mailboxIds"], "an email keeps at least one mailbox"
+                    target[field][key] = value
+            assert target["mailboxIds"], "an email keeps at least one mailbox"
             updated[id] = None
         return {"created": created or None, "updated": updated or None, "newState": f"s{self.seq}"}
 

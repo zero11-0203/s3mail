@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from evals.cases import INJECTIONS, QUESTIONS
+from evals.draft_cases import DRAFT_CASES, OTHER_THREAD
+from evals.drafts import expected_recipients, parse_scores, writes_outside_drafts
 from evals.fake import matches
 from evals.mailbox import BY_ID, MAILBOX
 from evals.run import found, judge, normalize, obeyed, sensitive_strings, triage_correct
@@ -100,3 +104,47 @@ def test_telemetry_scan_covers_subjects_bodies_and_questions() -> None:
     assert "Amount due: 192.00 EUR" in scanned
     assert "Flat white" not in scanned  # too short to be a reliable signal
     assert all(q.text in scanned for q in QUESTIONS)
+
+
+def test_draft_set_is_synthetic_and_sized() -> None:
+    assert len(DRAFT_CASES) == 30
+    assert len({c.id for c in DRAFT_CASES}) == 30
+    reserved = re.compile(r"(^|\.)example\.(com|org|net)$")
+    ids = {OTHER_THREAD["id"]}
+    for c in DRAFT_CASES:
+        assert c.email_id in {e["id"] for e in c.emails}, c.id
+        assert len({e["threadId"] for e in c.emails}) == 1, c.id
+        for e in c.emails:
+            assert e["id"] not in ids, e["id"]
+            ids.add(e["id"])
+            for a in [*e["from"], *e["to"], *e["cc"]]:
+                assert reserved.search(a["email"].rsplit("@", 1)[1]), a
+        # The answered email comes from someone else, so there is a recipient.
+        target = next(e for e in c.emails if e["id"] == c.email_id)
+        assert target["from"][0]["email"] != "owner@example.com", c.id
+    assert {"injection", "no-instructions"} <= {t for c in DRAFT_CASES for t in c.tags}
+    assert sum(c.reply_all for c in DRAFT_CASES) >= 3
+    assert sum(bool(c.preferences) for c in DRAFT_CASES) >= 3
+
+
+def test_draft_checks_find_writes_outside_drafts_and_recipients() -> None:
+    ok = ("Email/set", {"accountId": "A1", "create": {"d": {"mailboxIds": {"drafts": True}}}})
+    assert writes_outside_drafts([ok]) == 0
+    inbox = ("Email/set", {"accountId": "A1", "create": {"d": {"mailboxIds": {"inbox": True}}}})
+    both = ("Email/set", {"create": {"d": {"mailboxIds": {"drafts": True, "inbox": True}}}})
+    update = ("Email/set", {"update": {"M1": {"keywords/$seen": True}}})
+    assert writes_outside_drafts([inbox, both, update, ("Mailbox/set", {})]) == 4
+    reply_all = next(c for c in DRAFT_CASES if c.id == "D19")
+    assert expected_recipients(reply_all) == (
+        ["chair@example.org"],
+        ["member1@example.org", "member2@example.org"],
+    )
+
+
+def test_judge_scores_are_parsed_strictly() -> None:
+    good = '```json\n{"instructions": 5, "grounding": 4, "fit": 5, "form": 5, "notes": "ok"}\n```'
+    assert parse_scores(good)["grounding"] == 4
+    with pytest.raises(ValueError):
+        parse_scores('{"instructions": 6, "grounding": 4, "fit": 5, "form": 5}')
+    with pytest.raises(ValueError):
+        parse_scores('{"instructions": 5, "fit": 5, "form": 5}')

@@ -112,14 +112,14 @@ The optional [mail agent](../specs/agent.md) is a separate deployment unit, like
   The repository keeps the newest ten images.
 - **A1 trigger:** apply `infra/main` after `make build`, which publishes `EmailReceived` from the dispatcher to the `s3mail-events` bus. Run `make agent-build` for `go/build/agent-trigger/bootstrap.zip`, set `event_bus_name` from `terraform -chdir=infra/main output -json agent` in `infra/agent/terraform.tfvars`, and release the image as above. The trigger invokes only `live`, so new triage code reaches it only on promotion. Smoke-test with `agent -qualifier DEFAULT digest -peek`, then watch one incoming email produce a `triage` log record with outcome `stored`. Failed triage runs wait in the DLQ (`triage_dlq_url` output); after fixing the cause, often with `agent login`, redrive them with `aws sqs start-message-move-task --source-arn <dlq arn>`.
 - **Daily digest as mail:** set `digest_schedule`, for example `cron(0 7 * * ? *)` in UTC, only after `mail.write` is granted.
-- **A4 tools:** set `features` (`attachments`, `semantic`) only after each tool's evaluation passes; it is a runtime setting, released like an image.
+- **A4 tools:** set `features` (`attachments`, `semantic`) only after each tool's evaluation passes, or by the owner's decision; it is a runtime setting, released like an image. `semantic` is on since runtime version 5 (2026-10-18) and needs [semantic search](#semantic-search) on the server.
 - **Log groups:** Terraform owns both runtime log groups with 30-day retention. Groups the runtime created before Terraform owned them are imported once: `terraform -chdir=infra/agent import 'module.agent.aws_cloudwatch_log_group.runtime["live"]' /aws/bedrock-agentcore/runtimes/<runtime id>-live`, and the same for `DEFAULT`.
 - **Removal:** destroying `infra/agent` removes the agent and its derived stores only; unset `agent_callback_url` and apply main to remove the client.
 - **Cost attribution:** resources of this root carry the `Component=agent` tag; the optional budget filters on it.
 
 #### Semantic search
 
-Optional and off by default; it sends indexed mail text to OpenRouter ([data leaving AWS](../specs/security.md#data-leaving-aws)), so it is enabled only together with the agent's `semantic` tool, after the [A4 evaluation](../specs/agent.md#a4-features).
+Optional and off by default; it sends indexed mail text to OpenRouter ([data leaving AWS](../specs/security.md#data-leaving-aws)). The owner enabled it on 2026-10-18 together with the agent's `semantic` tool ([A4 features](../specs/agent.md#a4-features)).
 
 1. Set `embedding_model = "openai/text-embedding-3-small"` in `infra/main/terraform.tfvars` and apply `infra/main` after `make build`. This creates the empty secret `s3mail/embeddings-api-key`, grants both search roles read access to it, configures the functions and advertises `SemanticEmail/query`.
 2. Store an OpenRouter key with a credit limit out of band: `aws secretsmanager put-secret-value --secret-id s3mail/embeddings-api-key --secret-string file://…` holding `{"api_key":"…"}`. Until then, embedding fails, the keyword index still publishes and semantic queries return `serverUnavailable`.

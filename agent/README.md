@@ -38,11 +38,12 @@ make agent-check     # from the repository root: ruff, mypy and pytest
 
 The tests use no AWS account, model or network.
 
-The [evaluation suites](../docs/specs/agent.md#evaluation) in `evals/` run against synthetic mail with the real model. The A0 suite (50 questions and 30 injection attempts) costs about 0.40 USD per full run; the A1 triage set (150 emails, `openai/gpt-6-luna`) about 0.02 USD:
+The [evaluation suites](../docs/specs/agent.md#evaluation) in `evals/` run against synthetic mail with the real model. The A0 suite (50 questions and 30 injection attempts) costs about 0.40 USD per full run; the A1 triage set (150 emails, `openai/gpt-6-luna`) about 0.02 USD; the A2 draft set (30 threads, drafted and judged by the ask model) about 0.05 USD:
 
 ```sh
 make agent-eval                                   # A0; key from the s3mail-agent/model-api-key secret
 make agent-eval EVAL_ARGS="--suite triage"        # A1 triage set
+make agent-eval EVAL_ARGS="--suite drafts"        # A2 drafts; also writes a Markdown spot-check file
 make agent-eval EVAL_ARGS="--only q01 i00"        # a subset; OPENROUTER_API_KEY overrides the secret
 ```
 
