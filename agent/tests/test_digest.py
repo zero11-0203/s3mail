@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -218,6 +219,44 @@ async def test_mail_landing_behind_a_continuing_query_is_listed(
         listed += bulk((await run_digest(client(s), scripted(), table, now=NOW))["digest"])
     assert sorted(listed) == ["L1", *(f"N{i:03d}" for i in range(650))]
     assert table.cursor is not None and table.cursor.after_id is None
+
+
+@pytest.mark.parametrize(
+    ("start", "gone"),
+    [("expired", 1), ("none", 1), ("expired", 300), ("none", 300)],
+    ids=["expired-tail", "first-tail", "expired-page", "first-page"],
+)
+async def test_mail_destroyed_at_a_capped_page_end_keeps_the_query_going(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch, start: str, gone: int
+) -> None:
+    s, table = setup()
+    for i in range(650):
+        s.deliver(
+            message(
+                f"N{i:03d}", f"TN{i}", "b@example.org", f"Bulk {i}", "2026-10-17T13:00:00Z", "b"
+            )
+        )
+    # An expired cursor, or none: the first digest covers the same day.
+    table.cursor = Cursor("expired-state", "2026-10-17T07:00:00Z") if start == "expired" else None
+    real = s.method
+    destroyed: set[str] = set()
+
+    def method(name: str, args: dict[str, Any]) -> Any:
+        out = real(name, args)
+        if name == "Email/query" and not destroyed:
+            # The end of the first page is destroyed before the digest reads it.
+            destroyed.update(out["ids"][-gone:])
+            s.mailbox = [e for e in s.mailbox if e["id"] not in destroyed]
+            s.touch()
+        return out
+
+    monkeypatch.setattr(s, "method", method)
+    listed: list[str] = []
+    for _ in range(4):
+        listed += bulk((await run_digest(client(s), scripted(), table, now=NOW))["digest"])
+    assert sorted(listed) == [f"N{i:03d}" for i in range(650) if f"N{i:03d}" not in destroyed]
+    assert table.cursor is not None and table.cursor.after_id is None
+    assert table.cursor.state is not None
 
 
 async def test_a_change_page_budget_bounds_the_work(

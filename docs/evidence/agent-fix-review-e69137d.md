@@ -123,7 +123,7 @@ Added 2026-10-19 after this review; the findings above are unchanged. C1–C4 we
 
 ### Follow-up findings after `ae72106`
 
-Added 2026-10-19. A later review of the fixes above raised three more P2 issues, each confirmed in source before it was fixed. The C3 row above held only against the fake server, because s3mail itself did not enforce `ifInState` past the method's first state read (C9). These fixes are offline-tested only; nothing was deployed, and the agent's C3 protection holds live only once the backend change is deployed.
+Added 2026-10-19. The [review of `ae72106`](agent-fix-review-ae72106.md) raised three more P2 issues (A1–A3, here C7–C9), each confirmed in source before it was fixed; the C8 fix's regression found by the [review of `48a5b2e`](agent-fix-review-48a5b2e.md#resolution) is resolved there. The C3 row above held only against the fake server, because s3mail itself did not enforce `ifInState` past the method's first state read (C9). These fixes are offline-tested only; nothing was deployed, and the agent's C3 protection holds live only once the backend change is deployed.
 
 | ID | Finding | Resolution | Tests |
 | --- | --- | --- | --- |

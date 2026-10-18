@@ -171,14 +171,21 @@ async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Wi
     total = int(out["c1"].get("total") or len(page))
     if not page or int(out["c1"].get("position") or 0) + len(page) >= total:
         return Window(ids, 0, state)
-    # Truncated: the next digest resumes after the last listed email, first
-    # checking the mail created since this state.
+    # Truncated: the next digest resumes after the last listed email that
+    # still exists, first checking the mail created since this state. Any
+    # after it were destroyed meanwhile, so none is listed twice.
     last = await _headers(jmap, page[-1:], ["id", "receivedAt"])
-    at = last[0].get("receivedAt") if last else None
-    if not at:
-        # Destroyed meanwhile: resume from the same time and anchor.
-        return Window(ids, None, state, after, cursor.after_id if cursor else None)
-    return Window(ids, None, state, at, page[-1])
+    if not last or not last[0].get("receivedAt"):
+        found = {e["id"]: e for e in await _headers(jmap, page, ["id", "receivedAt"])}
+        last = [found[i] for i in reversed(page) if found.get(i, {}).get("receivedAt")][:1]
+    if last:
+        return Window(ids, None, state, last[0]["receivedAt"], last[0]["id"])
+    # The whole page was destroyed meanwhile. Keep the earlier anchor; with
+    # none, store no state either, since a state without an anchor would
+    # read as a finished query: the next digest queries from this time again.
+    if cursor is not None and cursor.after_id:
+        return Window(ids, None, state, after, cursor.after_id)
+    return Window(ids, None, None, after)
 
 
 async def _behind(jmap: JmapClient, cursor: Cursor) -> tuple[list[str], str, bool]:
