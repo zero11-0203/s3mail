@@ -22,7 +22,7 @@ As a public portfolio project, the interoperable JMAP server is deliberately bui
 
 ## Components and data flow
 
-![AWS mail-system architecture: CLI-first mail paths, deferred Phase 4 webmail and the later mail agent](diagrams/aws-mail-system.drawio.svg)
+![AWS mail-system architecture: CLI-first mail paths, the separately deployed browser webmail and the mail agent](diagrams/aws-mail-system.drawio.svg)
 
 [Open the editable AWS diagram](diagrams/aws-mail-system.drawio.svg) · [Editing and maintenance](diagrams/README.md)
 
