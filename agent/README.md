@@ -2,7 +2,7 @@
 
 The optional, read-only mail assistant (phase A0 of the [agent spec](../docs/specs/agent.md)): a LangGraph graph on Amazon Bedrock AgentCore Runtime that answers questions about the owner's mail. It reaches mail only through the s3mail JMAP API with the owner's OAuth token from the AgentCore Identity token vault, and every answer cites the emails it read.
 
-**Status:** implemented, not deployed or validated. Deployment waits for the mail system's [Phase 3 cutover](../docs/roadmap.md#agent-phases).
+**Status:** deployed on 2026-10-18, ahead of the mail system's [Phase 3 cutover](../docs/roadmap.md#agent-phases); the [A0 gate](../docs/specs/agent.md#a0-gate-mvp) has not passed.
 
 ## Layout
 

@@ -4,7 +4,7 @@
 
 ## Scope and status
 
-**Status: A0 is implemented but not deployed or validated:** the Python package, image and tests in `agent/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). No gate below has passed. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
+**Status: A0 is implemented and deployed (2026-10-18, ahead of the Phase 3 cutover at the owner's request) but not validated:** the Python package, image and tests in `agent/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). No gate below has passed. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
 
 ## Required behavior and invariants
 

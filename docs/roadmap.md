@@ -76,7 +76,7 @@ The [mail agent](specs/agent.md) is optional and lower priority. It begins after
 - Prerequisite: register the agent's Cognito app client with `s3mail/mail.read` only and add it to the authorizer allowlist in `infra/main`.
 - Deploy `infra/agent` with the AgentCore runtime, Memory and Identity credential provider. Ship the `agent` CLI with `login` and `ask`, the read-only JMAP tools, citation checks and content-free tracing.
 - Build the synthetic mailbox, question and injection sets and the telemetry scan. Rehearse the kill switch. No feature has side effects.
-- The code, image, Terraform and offline tests exist ([agent deployment](operations/deployment.md#agent-deployment)); nothing is applied, and the evaluation sets and every gate check remain.
+- The code, image, Terraform and offline tests exist and were deployed on 2026-10-18 ahead of the cutover ([agent deployment](operations/deployment.md#agent-deployment)); the evaluation sets and the remaining gate checks are open.
 
 ### A1 — Triage and digest
 

@@ -231,7 +231,7 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 
 ### `s3mail-agent-runtime` (AgentCore Runtime execution role)
 
-- **Module:** `infra/modules/agent`, applied only by the separate `infra/agent` root, and created only once an image digest is set (agent A0, not yet applied).
+- **Module:** `infra/modules/agent`, applied only by the separate `infra/agent` root, and created only once an image digest is set (agent A0, applied 2026-10-18).
 - **Purpose:** run the [mail agent](../specs/agent.md#identity-and-authorization). It reaches mail only through JMAP with the owner's token from the AgentCore Identity token vault. Trust: `bedrock-agentcore.amazonaws.com` with `aws:SourceAccount` = this account and `aws:SourceArn` like `arn:aws:bedrock-agentcore:<region>:<account>:*`.
 
 | Statement | Actions | Resource | Condition |
