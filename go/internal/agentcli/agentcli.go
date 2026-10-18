@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -275,7 +276,10 @@ func (c *Client) Login(ctx context.Context, open func(string), force bool) (bool
 	return true, nil
 }
 
-// Listen binds the loopback address of the return URL, never all interfaces.
+// Listen binds the loopback addresses of the return URL, never all
+// interfaces: 127.0.0.1, and ::1 where the host has it. Browsers try ::1
+// first for localhost, so another program on [::]:<port> (a local database,
+// say) would otherwise receive the redirect; the more specific ::1 bind wins.
 func Listen(returnURL string) (net.Listener, *url.URL, error) {
 	u, err := url.Parse(returnURL)
 	if err != nil {
@@ -288,8 +292,69 @@ func Listen(returnURL string) (net.Listener, *url.URL, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen on return port %s: %w", u.Port(), err)
 	}
-	return ln, u, nil
+	lns := []net.Listener{ln}
+	if u.Hostname() == "localhost" {
+		// Without IPv6 a browser falls back to 127.0.0.1.
+		if ln6, err := net.Listen("tcp", net.JoinHostPort("::1", u.Port())); err == nil {
+			lns = append(lns, ln6)
+		}
+	}
+	return newLoopback(lns), u, nil
 }
+
+// loopback accepts connections from several listeners as one.
+type loopback struct {
+	lns   []net.Listener
+	conns chan net.Conn
+	errs  chan error
+	done  chan struct{}
+	once  sync.Once
+}
+
+func newLoopback(lns []net.Listener) *loopback {
+	l := &loopback{lns: lns, conns: make(chan net.Conn), errs: make(chan error, len(lns)), done: make(chan struct{})}
+	for _, ln := range lns {
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					l.errs <- err
+					return
+				}
+				select {
+				case l.conns <- c:
+				case <-l.done:
+					_ = c.Close()
+					return
+				}
+			}
+		}()
+	}
+	return l
+}
+
+func (l *loopback) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	case err := <-l.errs:
+		return nil, err
+	}
+}
+
+func (l *loopback) Close() error {
+	l.once.Do(func() {
+		close(l.done)
+		for _, ln := range l.lns {
+			_ = ln.Close()
+		}
+	})
+	return nil
+}
+
+func (l *loopback) Addr() net.Addr { return l.lns[0].Addr() }
 
 // AwaitSession serves the vault's redirect and returns its session URI.
 // Only a GET on the callback path that carries state as a query value and a

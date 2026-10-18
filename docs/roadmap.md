@@ -71,7 +71,7 @@ Architecture choices are made; configured implementations still need proof. Reso
 
 The [mail agent](specs/agent.md) is optional and lower priority. It begins after the mail system's Phase 3 cutover requirements pass; neither that prerequisite nor primary-mail operation depends on the browser deployment, and the mail system never depends on the agent. Each phase adds one class of side effect and the OAuth scope it needs, and starts only after the previous phase's [gate](specs/agent.md#acceptance-checks) passes. A0–A3 are independent of Phase 4; only webmail chat in A4 needs it.
 
-**Owner decision (2026-10-18): build A1–A4 ahead of the cutover.** The owner chose to implement the later agent phases before the Phase 3 cutover, as with A0. The code for A1–A4 is built and tested together, but the order of side effects is kept: A1 is deployed with `mail.read` only, and the agent's Cognito client gets `mail.write` and then `mail.submit` only after the A1 and then the A2 gate passes ([granting a scope](operations/deployment.md#granting-agent-scopes)). The owner later waived the remaining A1 checks (2026-10-18), so `mail.write` is granted when the owner chooses, and enabled semantic search without an evaluation set; attachment text stays off until its evaluation passes. The cutover requirements and mail operation still never depend on the agent.
+**Owner decision (2026-10-18): build A1–A4 ahead of the cutover.** The owner chose to implement the later agent phases before the Phase 3 cutover, as with A0. The code for A1–A4 is built and tested together, but the order of side effects is kept: A1 is deployed with `mail.read` only, and the agent's Cognito client gets `mail.write` and then `mail.submit` only after the A1 and then the A2 gate passes ([granting a scope](operations/deployment.md#granting-agent-scopes)). The owner later waived the remaining A1 checks and granted `mail.write` (2026-10-18), and enabled semantic search without an evaluation set; attachment text stays off until its evaluation passes. The cutover requirements and mail operation still never depend on the agent.
 
 ### A0 — MVP: verify the path
 
@@ -88,7 +88,7 @@ The [mail agent](specs/agent.md) is optional and lower priority. It begins after
 ### A2 — Drafts
 
 - Grant `mail.write`. Add reply drafts restricted to the Drafts mailbox, the digest delivered as an email and owner-stated preferences in long-term memory.
-- Implemented with offline tests and the draft rubric suite (mean 4.99 of 5 over 30 threads, 2026-10-18); deployed in the same image, but `mail.write` is not granted yet, so the write modes stop with `scope_not_granted`. The owner spot check of the drafts is open.
+- Implemented with offline tests and the draft rubric suite (mean 4.99 of 5 over 30 threads, 2026-10-18); deployed in the same image, with `mail.write` granted on 2026-10-18. The owner spot check of the drafts is open.
 
 ### A3 — Approved actions
 

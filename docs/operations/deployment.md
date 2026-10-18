@@ -132,7 +132,7 @@ Each scope is granted only after the previous gate passes ([agent phases](../roa
 
 1. Add the scope to `agent_scopes` in `infra/main/terraform.tfvars`, for example `agent_scopes = ["mail.read", "mail.write"]`, and apply `infra/main`. Cognito now allows the scope for the agent client.
 2. Copy the new `oauth_scopes` from `terraform -chdir=infra/main output -json agent` into `infra/agent/terraform.tfvars` and release the runtime as above. The runtime requests and enables only its configured scopes, so modes needing a missing scope keep returning `scope_not_granted`.
-3. Run `agent login -force`: the vault keeps returning the stored token, with the old scopes, until the owner consents again. Check with a mode that needs the new scope, such as `agent -qualifier DEFAULT digest -peek -mail` for `mail.write`.
+3. Run `agent -qualifier DEFAULT login -force` against the new candidate version: the vault keeps returning the stored token, with the old scopes, until the owner consents again, and a version with the new scope list has no token until then. Promote the candidate only after a check succeeds on `DEFAULT`. Check with a mode that needs the new scope, such as `agent -qualifier DEFAULT digest -peek -mail` for `mail.write`.
 4. Withdraw a scope the same way in reverse; the kill switch (`agent_allowed = false`) stops the agent entirely.
 
 ### Environment
