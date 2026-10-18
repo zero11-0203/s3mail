@@ -1,11 +1,17 @@
-"""The agent graph (docs/specs/agent.md#langgraph-design). A0 builds the ask mode.
+"""The agent graph (docs/specs/agent.md#langgraph-design): the ask (A0) and
+act (A3) modes, both checkpointed per CLI thread.
 
-route (code) -> agent (model, read tools) <-> tools (code) -> check_evidence (code)
+ask: route (code) -> agent (model, read tools) <-> tools (code) -> check_evidence (code)
+act: route -> agent (model, read + propose tools) <-> tools
+       -> approval (interrupt) -> execute (code, once, on a matching hash)
 
 The router picks the mode from the payload, never from a model. Tool calls
 outside the mode's allowlist, budget overruns and answers without valid
-evidence end the run with an error code. The proposal, approval and send_key
-state fields arrive with approved actions in A3.
+evidence end the run with an error code. A propose tool never acts: code
+builds the exact calls and their hash, and the run stops at the approval
+interrupt. `agent approve` resumes the thread; LangGraph re-runs an
+interrupted node from its start, so proposing, approving and executing are
+separate nodes, and the executor runs only if the resumed hash matches.
 
 Each run sends the model only the earlier turns' questions and accepted
 answers plus the current run's messages. Earlier tool output and interrupted
@@ -17,7 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -25,7 +31,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
-    BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
@@ -35,15 +40,26 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command, interrupt
 from opentelemetry import trace
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from .citations import check_evidence
+from .citations import NO_MAIL, check_evidence
 from .jmap import GuardError, JmapAuthError, JmapClient, JmapError
-from .prompts import ASK_SYSTEM, EVIDENCE_RETRY
-from .tools import ASK_TOOLS
+from .metering import estimate_tokens, reported_tokens
+from .prompts import ACT_SYSTEM, ASK_SYSTEM, EVIDENCE_RETRY
+from .proposals import ProposalError, build_send, build_update, execute
+from .proposals import propose_send as propose_send_args
+from .proposals import propose_update as propose_update_args
+from .store import AgentTable
+from .tools import ASK_TOOLS, ToolSpec
 
-MODES = frozenset({"ask"})
+MODES = frozenset({"ask", "act"})
+PROPOSE_TOOLS: dict[str, type[BaseModel]] = {
+    "propose_update": propose_update_args,
+    "propose_send": propose_send_args,
+}
+NO_ACTION = "[no-action]"
 MAX_QUESTION_CHARS = 4000
 EVIDENCE_RETRIES = 1
 # Earlier question/answer pairs sent with each request.
@@ -66,6 +82,7 @@ ERR_TOOL_NOT_ALLOWED = "tool_not_allowed"
 ERR_CITATIONS = "invalid_citations"
 ERR_AUTH = "authorization_failed"
 ERR_JMAP = "jmap_unavailable"
+ERR_NO_APPROVAL = "no_pending_approval"
 
 
 class Budget(TypedDict):
@@ -87,6 +104,11 @@ class AgentState(TypedDict, total=False):
     citations: list[str]
     evidence: list[str]
     error: str | None
+    # A3: the proposal with its exact calls and hash, the owner's decision
+    # from the resumed interrupt, and what the executor did.
+    proposal: dict[str, Any] | None
+    decision: dict[str, Any] | None
+    outcome: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -101,19 +123,6 @@ class Limits:
     def recursion_limit(self) -> int:
         # Each step visits agent and tools or check_evidence, plus slack.
         return 3 * self.max_steps + 10
-
-
-def estimate_tokens(messages: Sequence[BaseMessage]) -> int:
-    """A deliberately high estimate: ASCII at 3 characters a token, other
-    characters (CJK above all) at one token each."""
-    total = 0
-    for m in messages:
-        text = m.content if isinstance(m.content, str) else json.dumps(m.content)
-        if isinstance(m, AIMessage) and m.tool_calls:
-            text += json.dumps(m.tool_calls, default=str)
-        ascii_chars = sum(c.isascii() for c in text)
-        total += ascii_chars // 3 + (len(text) - ascii_chars) + 8
-    return total
 
 
 def model_context(messages: Sequence[AnyMessage], run_start: int) -> list[AnyMessage]:
@@ -135,9 +144,21 @@ def build_graph(
     *,
     limits: Limits | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    read_tools: Mapping[str, ToolSpec] | None = None,
+    propose: frozenset[str] = frozenset(),
+    table: AgentTable | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """read_tools defaults to the A0 tools; propose names the propose tools
+    the act mode may offer, by the scopes granted (none disables act)."""
     limits = limits or Limits()
-    bound = model.bind_tools([spec.args for spec in ASK_TOOLS.values()])
+    reads = dict(read_tools if read_tools is not None else ASK_TOOLS)
+    proposing = {n: PROPOSE_TOOLS[n] for n in sorted(propose)}
+    allowed = {"ask": set(reads), "act": set(reads) | set(proposing)}
+    systems = {"ask": ASK_SYSTEM, "act": ACT_SYSTEM}
+    bound = {
+        "ask": model.bind_tools([s.args for s in reads.values()]),
+        "act": model.bind_tools([*(s.args for s in reads.values()), *proposing.values()]),
+    }
 
     def route(state: AgentState) -> dict[str, Any]:
         reset: dict[str, Any] = {
@@ -150,9 +171,12 @@ def build_graph(
             "citations": [],
             "evidence": [],
             "error": None,
+            "proposal": None,
+            "decision": None,
+            "outcome": None,
         }
         mode = state.get("mode")
-        if mode not in MODES:
+        if mode not in MODES or (mode == "act" and not proposing):
             return {**reset, "error": ERR_UNSUPPORTED_MODE}
         question = state.get("request", {}).get("question")
         if not isinstance(question, str) or not question.strip():
@@ -165,18 +189,18 @@ def build_graph(
         budget = state["budget"]
         if budget["steps"] >= limits.max_steps:
             return {"error": ERR_BUDGET}
+        mode = state["mode"]
         prompt = [
-            SystemMessage(content=ASK_SYSTEM),
+            SystemMessage(content=systems[mode]),
             *model_context(state["messages"], state.get("run_start", 0)),
         ]
         estimate = estimate_tokens(prompt) + TOOL_SCHEMA_TOKENS
         # Admission: the request plus the completion room must still fit.
         if budget["tokens"] + estimate + limits.reserve_tokens > limits.max_tokens:
             return {"error": ERR_BUDGET}
-        ai = await bound.ainvoke(prompt)
-        usage = getattr(ai, "usage_metadata", None) or {}
+        ai = await bound[mode].ainvoke(prompt)
         # Missing usage is charged at the estimate, never as zero.
-        used = int(usage.get("total_tokens") or 0) or estimate + estimate_tokens([ai])
+        used = reported_tokens(ai, estimate)
         spent = Budget(
             steps=budget["steps"] + 1,
             tool_calls=budget["tool_calls"],
@@ -193,7 +217,7 @@ def build_graph(
         assert isinstance(ai, AIMessage)
         budget = state["budget"]
         calls = ai.tool_calls
-        if any(c["name"] not in ASK_TOOLS for c in calls):
+        if any(c["name"] not in allowed[state["mode"]] for c in calls):
             return {
                 "messages": _tool_failures(ai, "Tool not allowed."),
                 "error": ERR_TOOL_NOT_ALLOWED,
@@ -203,11 +227,13 @@ def build_graph(
 
         fetched = set(state.get("fetched_ids", []))
         used = list(state.get("tools_used", []))
+        proposal = state.get("proposal")
         replies: list[ToolMessage] = []
         for call in calls:
-            spec = ASK_TOOLS[call["name"]]
+            name = call["name"]
+            spec_args: type[BaseModel] = proposing[name] if name in proposing else reads[name].args
             try:
-                args = spec.args.model_validate(call["args"])
+                args: Any = spec_args.model_validate(call["args"])
             except ValidationError as exc:
                 fields = ", ".join(str(e["loc"][0]) for e in exc.errors() if e["loc"])
                 replies.append(
@@ -220,10 +246,32 @@ def build_graph(
                 continue
             try:
                 # Content-free span: the tool name and result count only.
-                with _tracer.start_as_current_span(f"tool {call['name']}") as span:
-                    span.set_attribute("s3mail.tool", call["name"])
-                    result = await spec.run(jmap, args)
+                with _tracer.start_as_current_span(f"tool {name}") as span:
+                    span.set_attribute("s3mail.tool", name)
+                    if name in proposing:
+                        if proposal is not None:
+                            raise ProposalError("one proposal per request")
+                        if name == "propose_update":
+                            proposal = await build_update(jmap, args, fetched)
+                        else:
+                            proposal = await build_send(jmap, args)
+                        used.append(name)
+                        replies.append(
+                            ToolMessage(
+                                content="Proposal recorded; the owner will approve or reject it.",
+                                tool_call_id=call["id"],
+                            )
+                        )
+                        continue
+                    result = await reads[name].run(jmap, args)
                     span.set_attribute("s3mail.emails", len(result.email_ids))
+            except ProposalError as exc:
+                replies.append(
+                    ToolMessage(
+                        content=f"Proposal refused: {exc}.", tool_call_id=call["id"], status="error"
+                    )
+                )
+                continue
             except Exception as exc:
                 if isinstance(exc, GuardError):
                     code = ERR_TOOL_NOT_ALLOWED
@@ -236,7 +284,7 @@ def build_graph(
                             json.dumps(
                                 {
                                     "event": "tool_failed",
-                                    "tool": call["name"],
+                                    "tool": name,
                                     "exception": type(exc).__name__,
                                 }
                             )
@@ -251,7 +299,7 @@ def build_graph(
                     "error": code,
                 }
             fetched |= result.email_ids
-            used.append(call["name"])
+            used.append(name)
             replies.append(ToolMessage(content=result.content, tool_call_id=call["id"]))
 
         spent = Budget(
@@ -264,12 +312,18 @@ def build_graph(
             "fetched_ids": sorted(fetched),
             "tools_used": sorted(set(used)),
             "budget": spent,
+            "proposal": proposal,
         }
 
     def check(state: AgentState) -> dict[str, Any]:
         ai = state["messages"][-1]
         text = ai.text if isinstance(ai, AIMessage) else ""
-        evidence = check_evidence(text, state.get("fetched_ids", []), state.get("tools_used", []))
+        # In act mode, a reply without a proposal may say it makes no claim
+        # about mail by acting on nothing.
+        checked = text.replace(NO_ACTION, NO_MAIL) if state["mode"] == "act" else text
+        evidence = check_evidence(
+            checked, state.get("fetched_ids", []), state.get("tools_used", [])
+        )
         if not evidence.problems and isinstance(ai, AIMessage):
             return {
                 # Same id, so this replaces the message: named answers are
@@ -288,6 +342,25 @@ def build_graph(
             "citation_retries": retries + 1,
         }
 
+    def approval(state: AgentState) -> dict[str, Any]:
+        proposal = state["proposal"]
+        assert proposal is not None
+        decision = interrupt(
+            {
+                "hash": proposal["hash"],
+                "kind": proposal["kind"],
+                "summary": proposal["summary"],
+                "expires_at": proposal["expires_at"],
+            }
+        )
+        return {"decision": decision}
+
+    async def run_execute(state: AgentState) -> dict[str, Any]:
+        proposal = state["proposal"]
+        assert proposal is not None and table is not None
+        outcome = await execute(jmap, table, proposal, state.get("decision"))
+        return {"outcome": outcome}
+
     def after_route(state: AgentState) -> Literal["agent", "__end__"]:
         return STOP if state.get("error") else "agent"
 
@@ -297,8 +370,10 @@ def build_graph(
         last = state["messages"][-1]
         return "tools" if isinstance(last, AIMessage) and last.tool_calls else "check_evidence"
 
-    def after_tools(state: AgentState) -> Literal["agent", "__end__"]:
-        return STOP if state.get("error") else "agent"
+    def after_tools(state: AgentState) -> Literal["agent", "approval", "__end__"]:
+        if state.get("error"):
+            return STOP
+        return "approval" if state.get("proposal") else "agent"
 
     def after_check(state: AgentState) -> Literal["agent", "__end__"]:
         if state.get("error") or state.get("answer") is not None:
@@ -310,32 +385,26 @@ def build_graph(
     graph.add_node("agent", agent)
     graph.add_node("tools", tools)
     graph.add_node("check_evidence", check)
+    graph.add_node("approval", approval)
+    graph.add_node("execute", run_execute)
     graph.add_edge(START, "route")
     graph.add_conditional_edges("route", after_route)
     graph.add_conditional_edges("agent", after_agent)
     graph.add_conditional_edges("tools", after_tools)
     graph.add_conditional_edges("check_evidence", after_check)
+    graph.add_edge("approval", "execute")
+    graph.add_edge("execute", STOP)
     return graph.compile(checkpointer=checkpointer)
 
 
-async def run_ask(
-    graph: CompiledStateGraph[Any, Any, Any, Any],
-    question: str,
-    *,
-    thread_id: str,
-    actor_id: str,
-    limits: Limits | None = None,
-) -> dict[str, Any]:
-    """Run one question on a thread; return a content-free status plus the answer."""
-    limits = limits or Limits()
-    config: Any = {
+def _config(thread_id: str, actor_id: str, limits: Limits) -> Any:
+    return {
         "configurable": {"thread_id": thread_id, "actor_id": actor_id},
         "recursion_limit": limits.recursion_limit,
     }
-    try:
-        state = await graph.ainvoke({"mode": "ask", "request": {"question": question}}, config)
-    except GraphRecursionError:
-        return {"status": "error", "error": ERR_BUDGET}
+
+
+def _result(state: Mapping[str, Any]) -> dict[str, Any]:
     budget = state.get("budget", {})
     result: dict[str, Any] = {
         "status": "error" if state.get("error") else "ok",
@@ -345,8 +414,66 @@ async def run_ask(
     }
     if state.get("error"):
         result["error"] = state["error"]
-    else:
-        result["answer"] = state.get("answer")
-        result["citations"] = state.get("citations", [])
-        result["evidence"] = state.get("evidence", [])
+        return result
+    interrupts = state.get("__interrupt__") or []
+    if interrupts:
+        result["status"] = "approval_required"
+        result["approval"] = interrupts[0].value
+        return result
+    if state.get("outcome") is not None:
+        result["outcome"] = state["outcome"]
+        return result
+    result["answer"] = state.get("answer")
+    result["citations"] = state.get("citations", [])
+    result["evidence"] = state.get("evidence", [])
     return result
+
+
+async def run_ask(
+    graph: CompiledStateGraph[Any, Any, Any, Any],
+    question: str,
+    *,
+    thread_id: str,
+    actor_id: str,
+    limits: Limits | None = None,
+    mode: str = "ask",
+) -> dict[str, Any]:
+    """Run one question (ask) or request (act) on a thread; return a
+    content-free status plus the answer or the approval to show."""
+    limits = limits or Limits()
+    try:
+        state = await graph.ainvoke(
+            {"mode": mode, "request": {"question": question}},
+            _config(thread_id, actor_id, limits),
+        )
+    except GraphRecursionError:
+        return {"status": "error", "error": ERR_BUDGET}
+    return _result(state)
+
+
+async def run_approve(
+    graph: CompiledStateGraph[Any, Any, Any, Any],
+    *,
+    thread_id: str,
+    actor_id: str,
+    approval_hash: str,
+    approve: bool,
+    limits: Limits | None = None,
+) -> dict[str, Any]:
+    """Resume a thread's pending approval with the owner's decision."""
+    limits = limits or Limits()
+    config = _config(thread_id, actor_id, limits)
+    snapshot = await graph.aget_state(config)
+    pending = snapshot.next or ()
+    if "execute" in pending:
+        # The executor was interrupted after the approval was recorded: re-run
+        # it. The recorded decision still has to match, and the send marker
+        # turns a repeated send into a report of the earlier attempt.
+        recorded = snapshot.values.get("decision") or {}
+        if recorded.get("hash") != approval_hash:
+            return {"status": "error", "error": ERR_NO_APPROVAL}
+        return _result(await graph.ainvoke(None, config))
+    if "approval" not in pending:
+        return {"status": "error", "error": ERR_NO_APPROVAL}
+    state = await graph.ainvoke(Command(resume={"hash": approval_hash, "approve": approve}), config)
+    return _result(state)

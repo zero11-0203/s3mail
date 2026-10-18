@@ -164,7 +164,7 @@ func TestLoginCompletesSessionBindingForTheOwner(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	needed, err := client(f).Login(ctx, open)
+	needed, err := client(f).Login(ctx, open, false)
 	if err != nil || !needed || opened != "https://auth.example.com/consent" {
 		t.Fatalf("needed %v opened %q err %v", needed, opened, err)
 	}
@@ -178,11 +178,22 @@ func TestLoginCompletesSessionBindingForTheOwner(t *testing.T) {
 
 func TestLoginWhenAlreadyAuthorized(t *testing.T) {
 	f := &fakeAPI{replies: []string{`{"status":"ok"}`}}
-	needed, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") })
+	needed, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") }, false)
 	if err != nil || needed || len(f.completed) != 0 {
 		t.Fatalf("needed %v err %v", needed, err)
 	}
 	loginState(t, f)
+}
+
+func TestForcedLoginAsksForConsentAgain(t *testing.T) {
+	f := &fakeAPI{replies: []string{`{"status":"ok"}`}}
+	if _, err := client(f).Login(context.Background(), func(string) {}, true); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(f.invokes[0].Payload, &payload); err != nil || payload["force"] != true {
+		t.Fatalf("payload %v err %v", payload, err)
+	}
 }
 
 func TestLoginStatesAreFresh(t *testing.T) {
@@ -195,7 +206,7 @@ func TestLoginTimesOutWithoutRedirect(t *testing.T) {
 	f := &fakeAPI{replies: []string{consentReply(freeReturnURL(t))}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := client(f).Login(ctx, func(string) {}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := client(f).Login(ctx, func(string) {}, false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want deadline, got %v", err)
 	}
 	if len(f.completed) != 0 {
@@ -205,7 +216,7 @@ func TestLoginTimesOutWithoutRedirect(t *testing.T) {
 
 func TestLoginRefusesANonLoopbackReturnURL(t *testing.T) {
 	f := &fakeAPI{replies: []string{consentReply("https://evil.example.com/callback")}}
-	if _, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") }); err == nil {
+	if _, err := client(f).Login(context.Background(), func(string) { t.Error("opened a browser") }, false); err == nil {
 		t.Fatal("accepted a remote return URL")
 	}
 }

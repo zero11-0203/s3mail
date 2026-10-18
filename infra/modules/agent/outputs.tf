@@ -32,6 +32,15 @@ output "candidate_version" {
   value       = one(aws_bedrockagentcore_agent_runtime.this[*].agent_runtime_version)
 }
 
+output "table_name" {
+  value = aws_dynamodb_table.agent.name
+}
+
+output "triage_dlq_url" {
+  description = "Failed triage events, for inspection and redrive."
+  value       = one(aws_sqs_queue.triage_dlq[*].url)
+}
+
 output "runtime_id" {
   value = one(aws_bedrockagentcore_agent_runtime.this[*].agent_runtime_id)
 }

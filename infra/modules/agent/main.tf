@@ -1,11 +1,13 @@
-# Mail agent A0 (docs/specs/agent.md): an AgentCore runtime hosting the
-# LangGraph image, Memory for its checkpoints and an AgentCore Identity
-# credential provider for the owner's Cognito tokens. Mail is reached only
-# through JMAP with those tokens, so the runtime role has no grant on any
-# mail bucket, table, queue, key or index.
+# Mail agent (docs/specs/agent.md): an AgentCore runtime hosting the
+# LangGraph image, Memory for its checkpoints and the owner's preferences,
+# an AgentCore Identity credential provider for the owner's Cognito tokens,
+# the agent's own table, and from A1 the EmailReceived rule, queue and
+# trigger Lambda. Mail is reached only through JMAP with those tokens, so no
+# agent role has a grant on any mail bucket, table, queue, key or index.
 #
-# Memory, the key, both secrets and the credential provider exist
-# before an image does; the role, runtime and live endpoint only with one.
+# Memory, the key, both secrets, the table and the credential provider
+# exist before an image does; the role, runtime and live endpoint only with
+# one, and the trigger only with a runtime, a trigger zip and the event bus.
 
 data "aws_region" "current" {}
 
@@ -16,6 +18,7 @@ locals {
   account  = data.aws_caller_identity.current.account_id
   arn      = "arn:aws:bedrock-agentcore:${local.region}:${local.account}"
   deployed = var.image_uri != null
+  trigger  = local.deployed && var.trigger_zip != null && var.event_bus_name != null
 }
 
 # --- Agent stores --------------------------------------------------------------
@@ -32,9 +35,10 @@ resource "aws_kms_alias" "this" {
   target_key_id = aws_kms_key.this.key_id
 }
 
-# Graph checkpoints: messages, capped mail excerpts, nothing authoritative.
-# Short-term events only; no extraction strategy (and so no memory
-# execution role) until owner preferences in A2.
+# Graph checkpoints (short-term events: messages, capped mail excerpts) and
+# the owner's preferences (long-term records the owner writes with agent
+# remember). Nothing authoritative, and no extraction strategy, so no
+# memory execution role: nothing is extracted from mail.
 resource "aws_bedrockagentcore_memory" "this" {
   name                  = "${var.name}_memory"
   description           = "LangGraph checkpoints for ${var.name}"
@@ -80,6 +84,55 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "cognito" {
         discovery_url = "${var.oauth_issuer}/.well-known/openid-configuration"
       }
     }
+  }
+}
+
+# The agent's own state (docs/specs/agent.md#state-and-memory): one triage
+# row per email, the digest cursor and send markers. Derived and
+# disposable: rows expire, and losing the table loses only triage labels,
+# the cursor and send markers, so it has no backup.
+resource "aws_dynamodb_table" "agent" {
+  name         = var.resource_prefix
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  attribute {
+    name = "reply_pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "reply_sk"
+    type = "S"
+  }
+
+  # Sparse: only triage rows that need a reply carry reply_pk.
+  global_secondary_index {
+    name            = "reply"
+    hash_key        = "reply_pk"
+    range_key       = "reply_sk"
+    projection_type = "ALL"
+  }
+
+  ttl {
+    attribute_name = "expires"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.this.arn
   }
 }
 
@@ -159,6 +212,20 @@ resource "aws_iam_role_policy" "runtime" {
         Resource = aws_bedrockagentcore_memory.this.arn
       },
       {
+        # Owner-written preference records; nothing is extracted from mail.
+        Sid      = "Preferences"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:BatchCreateMemoryRecords", "bedrock-agentcore:ListMemoryRecords", "bedrock-agentcore:BatchDeleteMemoryRecords"]
+        Resource = aws_bedrockagentcore_memory.this.arn
+      },
+      {
+        # No delete or scan: rows only expire.
+        Sid      = "AgentTable"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:BatchGetItem"]
+        Resource = [aws_dynamodb_table.agent.arn, "${aws_dynamodb_table.agent.arn}/index/reply"]
+      },
+      {
         # Only the user-id form: callers are SigV4 (the owner's CLI), and
         # no inbound JWT exists before webmail chat.
         Sid    = "WorkloadToken"
@@ -204,6 +271,7 @@ resource "aws_iam_role_policy" "runtime" {
             "kms:ViaService" = [
               "secretsmanager.${local.region}.amazonaws.com",
               "bedrock-agentcore.${local.region}.amazonaws.com",
+              "dynamodb.${local.region}.amazonaws.com",
             ]
           }
         }
@@ -218,7 +286,7 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   count = local.deployed ? 1 : 0
 
   agent_runtime_name = var.name
-  description        = "s3mail read-only mail agent (A0)"
+  description        = "s3mail mail agent"
   role_arn           = aws_iam_role.runtime[0].arn
 
   agent_runtime_artifact {
@@ -248,8 +316,11 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
     OAUTH_RETURN_URL     = var.oauth_return_url
     MEMORY_ID            = aws_bedrockagentcore_memory.this.id
     ASK_MODEL            = var.ask_model
+    TRIAGE_MODEL         = var.triage_model
     MODEL_BASE_URL       = var.model_base_url
     MODEL_KEY_SECRET_ARN = aws_secretsmanager_secret.model_key.arn
+    AGENT_TABLE          = aws_dynamodb_table.agent.name
+    AGENT_FEATURES       = join(" ", var.features)
 
     # AgentCore Observability without content: ADOT's framework
     # instrumentors record prompts and completions whatever the capture

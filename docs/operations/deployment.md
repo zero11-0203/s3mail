@@ -93,9 +93,9 @@ The webmail (Phase 4, [browser hosting](../specs/clients.md#browser-hosting-and-
 
 ### Agent deployment
 
-The optional [mail agent](../specs/agent.md) is a separate deployment unit, like the webmail, and starts only after the [Phase 3 cutover](../roadmap.md#agent-phases). The code (`agent/`), the `infra/agent` root and the main-root registration were first applied on 2026-10-18, ahead of the cutover at the owner's request; the [A0 gate](../specs/agent.md#a0-gate-mvp) has not passed.
+The optional [mail agent](../specs/agent.md) is a separate deployment unit, like the webmail, and starts only after the [Phase 3 cutover](../roadmap.md#agent-phases). The code (`agent/`), the `infra/agent` root and the main-root registration were first applied on 2026-10-18, ahead of the cutover at the owner's request, and the A1 trigger the same day; the [agent gates](../specs/agent.md#acceptance-checks) have not passed.
 
-- **Boundary:** `infra/main` owns only the agent's confidential Cognito app client and its authorizer allowlist entry, created by setting `agent_callback_url`; `agent_allowed = false` is the kill switch, removing the allowlist entry without deleting the client. `infra/agent` owns the ECR repository, Memory, the KMS key, the client-secret and model-key secrets, the AgentCore Identity credential provider, the runtime role, the runtime and its `live` endpoint. It takes the main root's `agent` output as plain variables and never reads the main state.
+- **Boundary:** `infra/main` owns only the agent's confidential Cognito app client and its authorizer allowlist entry, created by setting `agent_callback_url`; `agent_allowed = false` is the kill switch, removing the allowlist entry without deleting the client. `infra/agent` owns the ECR repository, Memory, the KMS key, the client-secret and model-key secrets, the AgentCore Identity credential provider, the agent table, the runtime role, the runtime and its `live` endpoint, and from A1 the rule on the mail system's event bus, the triage queue and DLQ, the trigger Lambda and its role, and the optional digest schedule. It takes the main root's `agent` output as plain variables and never reads the main state; the event bus belongs to `infra/main` and has no rule there.
 - **First deployment:** the client's redirect URI is the credential provider's callback, which exists only after the provider, so the first deployment crosses the two roots twice.
   1. Set `agent_callback_url = "https://localhost/agent-pending"` in `infra/main` and apply.
   2. Copy `terraform -chdir=infra/main output -json agent` into `infra/agent/terraform.tfvars`, optionally override `ask_model` (default `openai/gpt-6.1-sol`), initialize with `terraform init -backend-config=../backend.hcl` and apply with `image_digest` unset and `-target=module.agent.aws_secretsmanager_secret.client`. The credential provider checks at creation that its secret has a value, so the secret comes first.
@@ -110,9 +110,21 @@ The optional [mail agent](../specs/agent.md) is a separate deployment unit, like
   3. Promote: set `live_version` to `candidate_version` and apply. Roll back the same way with an earlier version.
 
   The repository keeps the newest ten images.
+- **A1 trigger:** apply `infra/main` after `make build`, which publishes `EmailReceived` from the dispatcher to the `s3mail-events` bus. Run `make agent-build` for `go/build/agent-trigger/bootstrap.zip`, set `event_bus_name` from `terraform -chdir=infra/main output -json agent` in `infra/agent/terraform.tfvars`, and release the image as above. The trigger invokes only `live`, so new triage code reaches it only on promotion. Smoke-test with `agent -qualifier DEFAULT digest -peek`, then watch one incoming email produce a `triage` log record with outcome `stored`. Failed triage runs wait in the DLQ (`triage_dlq_url` output); after fixing the cause, often with `agent login`, redrive them with `aws sqs start-message-move-task --source-arn <dlq arn>`.
+- **Daily digest as mail:** set `digest_schedule`, for example `cron(0 7 * * ? *)` in UTC, only after `mail.write` is granted.
+- **A4 tools:** set `features` (`attachments`, `semantic`) only after each tool's evaluation passes; it is a runtime setting, released like an image.
 - **Log groups:** Terraform owns both runtime log groups with 30-day retention. Groups the runtime created before Terraform owned them are imported once: `terraform -chdir=infra/agent import 'module.agent.aws_cloudwatch_log_group.runtime["live"]' /aws/bedrock-agentcore/runtimes/<runtime id>-live`, and the same for `DEFAULT`.
 - **Removal:** destroying `infra/agent` removes the agent and its derived stores only; unset `agent_callback_url` and apply main to remove the client.
 - **Cost attribution:** resources of this root carry the `Component=agent` tag; the optional budget filters on it.
+
+#### Granting agent scopes
+
+Each scope is granted only after the previous gate passes ([agent phases](../roadmap.md#agent-phases)): `mail.write` after the A1 gate, `mail.submit` after the A2 gate.
+
+1. Add the scope to `agent_scopes` in `infra/main/terraform.tfvars`, for example `agent_scopes = ["mail.read", "mail.write"]`, and apply `infra/main`. Cognito now allows the scope for the agent client.
+2. Copy the new `oauth_scopes` from `terraform -chdir=infra/main output -json agent` into `infra/agent/terraform.tfvars` and release the runtime as above. The runtime requests and enables only its configured scopes, so modes needing a missing scope keep returning `scope_not_granted`.
+3. Run `agent login -force`: the vault keeps returning the stored token, with the old scopes, until the owner consents again. Check with a mode that needs the new scope, such as `agent -qualifier DEFAULT digest -peek -mail` for `mail.write`.
+4. Withdraw a scope the same way in reverse; the kill switch (`agent_allowed = false`) stops the agent entirely.
 
 ### Environment
 

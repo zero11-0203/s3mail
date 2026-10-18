@@ -5,12 +5,14 @@ short-lived access tokens to this runtime's workload identity. When it has
 no usable token it returns a consent URL; instead of polling for minutes
 inside an invocation, the run stops with authorization_required and the
 CLI's `agent login` completes consent (docs/specs/agent.md#identity-and-authorization).
-Login passes the CLI's random state through as custom_state.
+Login passes the CLI's random state through as custom_state; a forced
+login asks for consent again even when the vault holds a token, which a
+newly granted scope needs.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
 from bedrock_agentcore.services.identity import IdentityClient, TokenPoller
@@ -33,14 +35,16 @@ class _NoWait(TokenPoller):
         raise _ConsentPending
 
 
-# Takes the login's CSRF state, or None outside login.
-TokenSource = Callable[[str | None], Awaitable[str]]
+class TokenSource(Protocol):
+    """Takes the login's CSRF state, or None outside login."""
+
+    async def __call__(self, state: str | None = None, *, force: bool = False) -> str: ...
 
 
 def vault_token_source(settings: Settings, client: IdentityClient | None = None) -> TokenSource:
     identity = client or IdentityClient(settings.region)
 
-    async def token(state: str | None = None) -> str:
+    async def token(state: str | None = None, *, force: bool = False) -> str:
         workload_token = BedrockAgentCoreContext.get_workload_access_token()
         if not workload_token:
             raise RuntimeError("no workload access token: not running on AgentCore Runtime")
@@ -55,6 +59,7 @@ def vault_token_source(settings: Settings, client: IdentityClient | None = None)
                 # Sent back to the return URL; agent login accepts only a
                 # callback carrying the state it generated.
                 custom_state=state,
+                force_authentication=force,
                 on_auth_url=urls.append,
                 token_poller=_NoWait(),
             )

@@ -59,6 +59,53 @@ type Result struct {
 	// ReturnURL is where the vault redirects after consent: the loopback
 	// address login listens on, as configured on the runtime.
 	ReturnURL string `json:"return_url,omitempty"`
+
+	// Later phases: the digest text, the draft saved, the approval to show
+	// and what an approved action did, preferences, and the triage result.
+	Digest      string       `json:"digest,omitempty"`
+	EmailID     string       `json:"email_id,omitempty"`
+	DraftID     string       `json:"draft_id,omitempty"`
+	Draft       *Draft       `json:"draft,omitempty"`
+	Approval    *Approval    `json:"approval,omitempty"`
+	Outcome     *Outcome     `json:"outcome,omitempty"`
+	Preference  *Preference  `json:"preference,omitempty"`
+	Preferences []Preference `json:"preferences,omitempty"`
+	Forgotten   int          `json:"forgotten,omitempty"`
+	Triage      string       `json:"triage,omitempty"`
+}
+
+// Draft is a reply the agent saved in Drafts.
+type Draft struct {
+	From    string   `json:"from"`
+	To      []string `json:"to"`
+	Cc      []string `json:"cc"`
+	Subject string   `json:"subject"`
+	Body    string   `json:"body"`
+}
+
+// Approval is a proposed action waiting for the owner: its exact effect
+// as text and the hash an approval must carry.
+type Approval struct {
+	Hash      string `json:"hash"`
+	Kind      string `json:"kind"`
+	Summary   string `json:"summary"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// Outcome is what the executor did with an approval.
+type Outcome struct {
+	Outcome      string   `json:"outcome"`
+	Error        string   `json:"error,omitempty"`
+	Updated      []string `json:"updated,omitempty"`
+	Failed       []string `json:"failed,omitempty"`
+	SubmissionID string   `json:"submission_id,omitempty"`
+	Submissions  []string `json:"submissions,omitempty"`
+}
+
+// Preference is one owner-stated preference.
+type Preference struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
 }
 
 // NoMail reports whether the answer says it consulted no mail.
@@ -120,31 +167,75 @@ func (c *Client) Invoke(ctx context.Context, payload any, session string) (Resul
 // Ask asks one question on thread, or on a new thread when it is empty,
 // and returns the answer and the thread id to continue with.
 func (c *Client) Ask(ctx context.Context, question, thread string) (Result, string, error) {
+	return c.Call(ctx, map[string]any{"mode": "ask", "question": question}, thread)
+}
+
+// Call sends one payload on thread, or on a new thread when it is empty.
+// An answer and a proposal waiting for approval are both successes.
+func (c *Client) Call(ctx context.Context, payload map[string]any, thread string) (Result, string, error) {
 	if thread == "" {
 		thread = NewSessionID()
 	}
-	res, err := c.Invoke(ctx, map[string]string{"mode": "ask", "question": question}, thread)
+	res, err := c.Invoke(ctx, payload, thread)
 	if err != nil {
 		return Result{}, thread, err
 	}
+	return res, thread, Check(res)
+}
+
+// Check turns a runtime status into an error.
+func Check(res Result) error {
 	switch res.Status {
-	case "ok":
-		return res, thread, nil
+	case "ok", "approval_required":
+		return nil
 	case "authorization_required":
-		return res, thread, ErrNotAuthorized
+		return ErrNotAuthorized
 	default:
-		return res, thread, fmt.Errorf("agent error: %s", orUnknown(res.Error, res.Status))
+		return fmt.Errorf("agent error: %s", orUnknown(res.Error, res.Status))
 	}
+}
+
+// approvalHash is a proposal's SHA-256, as the runtime renders it.
+var approvalHash = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ApprovalID joins the thread and the hash the owner approves; approve and
+// reject resume exactly that thread with exactly that hash.
+func ApprovalID(thread, hash string) string {
+	return thread + ":" + hash
+}
+
+// ParseApprovalID splits an approval id from ApprovalID.
+func ParseApprovalID(id string) (thread, hash string, err error) {
+	thread, hash, ok := strings.Cut(strings.TrimSpace(id), ":")
+	if !ok || len(thread) < 33 || !approvalHash.MatchString(hash) {
+		return "", "", errors.New("an approval id is THREAD:HASH, as printed by agent act")
+	}
+	return thread, hash, nil
+}
+
+// Decide approves or rejects a pending proposal.
+func (c *Client) Decide(ctx context.Context, id string, approve bool) (Result, error) {
+	thread, hash, err := ParseApprovalID(id)
+	if err != nil {
+		return Result{}, err
+	}
+	res, _, err := c.Call(ctx, map[string]any{"mode": "approve", "hash": hash, "approve": approve}, thread)
+	return res, err
 }
 
 // Login gets the owner's consent once. It asks the runtime for a consent
 // URL with a fresh random state, listens on the runtime's return URL, hands
 // the consent URL to open, and completes the session binding for the owner
 // user id only for a callback that carries that state. It reports whether
-// consent was needed.
-func (c *Client) Login(ctx context.Context, open func(string)) (bool, error) {
+// consent was needed. With force, the vault asks for consent even when it
+// holds a token, as a newly granted scope needs.
+func (c *Client) Login(ctx context.Context, open func(string), force bool) (bool, error) {
 	state := NewLoginState()
-	res, err := c.Invoke(ctx, map[string]string{"mode": "login", "state": state}, NewSessionID())
+	payload := map[string]any{"mode": "login", "state": state}
+	if force {
+		payload["force"] = true
+	}
+	res, err := c.Invoke(ctx, payload, NewSessionID())
 	if err != nil {
 		return false, err
 	}

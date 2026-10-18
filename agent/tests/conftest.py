@@ -186,8 +186,11 @@ class FakeJmap:
             except MethodError as exc:
                 responses.append(["error", {"type": exc.type}, call_id])
                 continue
-            results[call_id] = (name, out)
-            responses.append([name, out, call_id])
+            # A method may answer with implicit extra responses under the
+            # same call id (RFC 8621 onSuccessUpdateEmail).
+            for response_name, response in out if isinstance(out, list) else [(name, out)]:
+                results.setdefault(call_id, (response_name, response))
+                responses.append([response_name, response, call_id])
         return httpx.Response(200, json={"methodResponses": responses, "sessionState": "s1"})
 
     def method(self, name: str, args: dict[str, Any]) -> dict[str, Any]:

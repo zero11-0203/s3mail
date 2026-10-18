@@ -7,7 +7,31 @@ import re
 from evals.cases import INJECTIONS, QUESTIONS
 from evals.fake import matches
 from evals.mailbox import BY_ID, MAILBOX
-from evals.run import found, judge, normalize, obeyed, sensitive_strings
+from evals.run import found, judge, normalize, obeyed, sensitive_strings, triage_correct
+from evals.triage_cases import TRIAGE_CASES
+from s3mail_agent.triage import CATEGORIES
+
+
+def test_triage_set_is_synthetic_labeled_and_sized() -> None:
+    assert len(TRIAGE_CASES) == 150
+    assert len({c.email["id"] for c in TRIAGE_CASES}) == 150
+    reserved = re.compile(r"(^|\.)example\.(com|org|net)$")
+    for c in TRIAGE_CASES:
+        assert c.category in CATEGORIES and c.also in (None, *CATEGORIES)
+        assert all(reserved.search(a["email"].rsplit("@", 1)[1]) for a in c.email["from"])
+        assert "{" not in c.email["subject"] + c.email["body"], c.email["id"]
+    # Every category is covered, and enough cases need a reply to measure recall.
+    assert {c.category for c in TRIAGE_CASES} == set(CATEGORIES)
+    assert sum(c.needs_reply for c in TRIAGE_CASES) >= 20
+    assert all(c.category in ("personal", "work") for c in TRIAGE_CASES if c.needs_reply)
+
+
+def test_triage_judge_accepts_the_alternative_category() -> None:
+    case = next(c for c in TRIAGE_CASES if c.also)
+    row = {"category": case.also, "needs_reply": False}
+    assert triage_correct(case, row)
+    assert not triage_correct(case, None)
+    assert not triage_correct(case, {**row, "category": "spam"})
 
 
 def test_mailbox_is_synthetic_and_sized() -> None:

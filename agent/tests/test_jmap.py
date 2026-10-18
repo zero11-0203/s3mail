@@ -6,9 +6,22 @@ import pathlib
 import pytest
 
 from s3mail_agent import jmap as jmap_module
-from s3mail_agent.jmap import READ_METHODS, GuardError, JmapAuthError, JmapClient, JmapError
+from s3mail_agent.jmap import (
+    EMAIL_SET,
+    MAILBOX_SET,
+    READ_METHODS,
+    SUBMISSION_SET,
+    WRITE_ARGUMENTS,
+    WRITE_METHODS,
+    GuardError,
+    JmapAuthError,
+    JmapClient,
+    JmapError,
+    JmapUnknownResult,
+)
 
 from .conftest import SESSION_URL, FakeJmap
+from .mailserver import MailServer, message
 
 SRC = pathlib.Path(jmap_module.__file__).parent
 
@@ -45,20 +58,71 @@ async def test_mutation_arguments_are_refused(client: JmapClient, fake: FakeJmap
 
 
 def test_allowlist_has_only_reads() -> None:
-    assert all(m.endswith(("/get", "/query")) for m in READ_METHODS)
+    assert all(m.endswith(("/get", "/query", "/changes")) for m in READ_METHODS)
+    assert not READ_METHODS & WRITE_METHODS
 
 
 def test_no_source_can_send_destroy() -> None:
-    """Fails the build if any agent module names a destroy argument or a write method."""
+    """Fails the build if any agent module names destroy or a write method
+    outside jmap.py, whose write table and guard are the only places."""
     for path in SRC.rglob("*.py"):
+        if path.name == "jmap.py":
+            continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 value = node.value
-                if path.name == "jmap.py" and value in ("create", "update", "destroy"):
-                    continue  # the guard's own refusal list
                 assert value != "destroy", f"{path.name} names destroy"
+                assert "onSuccessDestroyEmail" not in value, path.name
                 assert not value.endswith(("/set", "/import", "/copy")), f"{path.name}: {value}"
+    # In jmap.py, destroy appears only in the guard's refusal list.
+    tree = ast.parse((SRC / "jmap.py").read_text())
+    names = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value == "destroy"]
+    assert len(names) == 1
+    assert all("destroy" not in allowed for allowed in WRITE_ARGUMENTS.values())
+
+
+@pytest.mark.parametrize("method", sorted(WRITE_METHODS))
+async def test_writes_need_the_mode_allowlist(fake: FakeJmap, method: str) -> None:
+    client = JmapClient(SESSION_URL, "t", transport=fake.transport())
+    with pytest.raises(GuardError):
+        await client.write(method, {"create": {}})
+    assert fake.calls == []
+
+
+async def test_destroy_is_refused_in_every_mode(fake: FakeJmap) -> None:
+    client = JmapClient(SESSION_URL, "t", transport=fake.transport(), writes=WRITE_METHODS)
+    for method in WRITE_METHODS:
+        with pytest.raises(GuardError):
+            await client.write(method, {"destroy": ["M1"]})
+    with pytest.raises(GuardError):
+        await client.write(MAILBOX_SET, {"update": {"inbox": {"name": "x"}}})
+    with pytest.raises(GuardError):
+        await client.write(SUBMISSION_SET, {"onSuccessDestroyEmail": ["#s"]})
+    assert fake.calls == []
+
+
+def test_unknown_write_methods_are_refused() -> None:
+    with pytest.raises(GuardError):
+        JmapClient(SESSION_URL, "t", writes=frozenset({"Email/import"}))
+
+
+async def test_writes_are_sent_once() -> None:
+    server = MailServer()
+    client = JmapClient(
+        SESSION_URL, "t", transport=server.transport(), backoff=0, writes=frozenset({EMAIL_SET})
+    )
+    server.statuses = [503, 200]
+    with pytest.raises(JmapUnknownResult):
+        await client.write(EMAIL_SET, {"update": {}})
+    assert server.statuses == [200]  # not retried
+
+    server.fail_write = "transport"
+    server.deliver(message("M1", "T1", "a@example.com", "s", "2026-10-01T00:00:00Z", "b"))
+    with pytest.raises(JmapUnknownResult):
+        await client.write(EMAIL_SET, {"update": {"M1": {"keywords/$flagged": True}}})
+    assert sum(n == "Email/set" for n, _ in server.writes) == 1
+    assert server.by_id("M1")["keywords"] == {"$flagged": True}
 
 
 async def test_retries_reads_on_429_and_5xx(client: JmapClient, fake: FakeJmap) -> None:

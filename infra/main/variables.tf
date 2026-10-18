@@ -99,6 +99,12 @@ variable "agent_allowed" {
   default     = true
 }
 
+variable "agent_scopes" {
+  description = "The agent client's scopes, each granted only after the previous agent gate passes (docs/operations/deployment.md#granting-agent-scopes): mail.read in A0 and A1, then mail.write, then mail.submit."
+  type        = list(string)
+  default     = ["mail.read"]
+}
+
 variable "owner_subject" {
   description = "The owner's Cognito sub, mapped to the mail account (set in terraform.tfvars)."
   type        = string

@@ -16,4 +16,12 @@ oauth_scopes     = ["s3mail/mail.read"]
 # candidate_version to promote it.
 # live_version = "1"
 
-# budget = { monthly_usd = 5, email = "owner@example.com" }
+# A1 triage: agent.event_bus_name from infra/main; run make agent-build
+# first for the trigger zip.
+# event_bus_name = "s3mail-events"
+# The daily digest delivered as mail (UTC); only once mail.write is granted.
+# digest_schedule = "cron(0 7 * * ? *)"
+# A4 tools, each after its evaluation: attachments, semantic.
+# features = []
+
+# budget ={ monthly_usd = 5, email = "owner@example.com" }

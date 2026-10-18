@@ -14,6 +14,7 @@ dependencies = [
     "langchain-openai==1.7.2",
     "langgraph==1.2.16",
     "langgraph-checkpoint-aws==1.2.5",
+    "pypdf>=6",
 ]
 
 [dependency-groups]
@@ -43,6 +44,7 @@ ignore = ["S101"]
 [tool.ruff.lint.per-file-ignores]
 # Fixture data: whole synthetic emails read better unwrapped.
 "evals/mailbox.py" = ["E501"]
+"evals/triage_cases.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

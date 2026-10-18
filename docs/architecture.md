@@ -53,7 +53,7 @@ All mail backend Lambdas and terminal helpers use Go. Only the later upstream we
 
 ## Future extension points
 
-An optional [mail agent](specs/agent.md) follows after Phase 3 cutover. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately, and the mail system never depends on it. Its prerequisites are ordinary interfaces: OAuth app registration and per-method scopes, JMAP capability discovery/dispatch, single-writer index extensibility and content-free `EmailReceived` events through the outbox. The agent accesses mail only through JMAP, has no IAM access to mail storage and holds no authoritative mail data. Neither initial mail operation nor the agent prerequisite depends on deploying browser webmail.
+An optional [mail agent](specs/agent.md) was planned to follow the Phase 3 cutover; the owner chose to build it ahead of the cutover, granting its write scopes only as its gates pass ([roadmap](roadmap.md#agent-phases)). It lives in this repository (`agent/`, `infra/agent/`) but deploys separately, and the mail system never depends on it. Its prerequisites are ordinary interfaces: OAuth app registration and per-method scopes, JMAP capability discovery/dispatch, single-writer index extensibility and content-free `EmailReceived` events through the outbox. The agent accesses mail only through JMAP, has no IAM access to mail storage and holds no authoritative mail data. Neither initial mail operation nor the agent prerequisite depends on deploying browser webmail.
 
 ## Design principles
 

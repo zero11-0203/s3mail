@@ -37,6 +37,7 @@ Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**
 - The owner chose **no alarms** for now, because each is billed. Problems are found on the dashboard, in X-Ray and with `mail-admin submissions`.
 - If alarms are added later, they cover any DLQ entry, ingestion/outbox backlog, JMAP failures, expired send leases/unknown acceptance, relay quota, index lag over six minutes, snapshot size/cold-search latency, auth spikes, missing work-recovery/GC completion, derived cleanup approaching seven days and cost budgets. Real-traffic alarms have the accepted no-traffic blind spot ([deployment policy](deployment.md#cicd)); they are not an end-to-end availability monitor. Notifications go through SNS to an **address outside this mail system** (and optionally a mobile push), so alerts still arrive when the mail system itself is broken.
 - One CloudWatch dashboard of built-in metrics shows the mail path end to end, within the free dashboard allowance (50 metrics).
+- The optional [mail agent](../specs/agent.md#deployment-and-operations) is not on this dashboard: the mail path never depends on it. Its problems show as messages in its triage DLQ (`infra/agent` output `triage_dlq_url`), trigger Lambda errors and content-free error codes in the runtime logs. A failed `EmailReceived` publish keeps the outbox entry and shows as dispatcher errors here.
 
 ### Tracing (X-Ray)
 

@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .jmap import MAX_BODY_VALUE_BYTES, JmapClient, ref
+from .jmap import MAX_BODY_VALUE_BYTES, SEMANTIC_QUERY, JmapClient, Session, ref
 
 HEADER_PROPERTIES = ["id", "threadId", "mailboxIds", "from", "to", "subject", "receivedAt"]
 THREAD_BODY_BYTES = 4 * 1024
@@ -124,7 +124,7 @@ def _addresses(value: list[dict[str, Any]] | None) -> list[str]:
     return out
 
 
-def _header(email: dict[str, Any]) -> dict[str, Any]:
+def header_of(email: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": email["id"],
         "threadId": email.get("threadId"),
@@ -135,7 +135,7 @@ def _header(email: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _body(email: dict[str, Any], cap: int) -> tuple[str, bool]:
+def body_text(email: dict[str, Any], cap: int) -> tuple[str, bool]:
     values = email.get("bodyValues", {})
     texts, truncated = [], False
     for part in email.get("textBody", []):
@@ -194,7 +194,7 @@ async def run_search_mail(client: JmapClient, args: search_mail) -> ToolResult:
             ),
         ]
     )
-    emails = [{**_header(e), "preview": e.get("preview")} for e in results["c1"]["list"]]
+    emails = [{**header_of(e), "preview": e.get("preview")} for e in results["c1"]["list"]]
     payload = {"total": results["c0"].get("total"), "emails": emails}
     return ToolResult(envelope(payload), frozenset(e["id"] for e in emails))
 
@@ -206,7 +206,7 @@ async def run_read_email(client: JmapClient, args: read_email) -> ToolResult:
                 "Email/get",
                 {
                     "ids": args.ids,
-                    "properties": [*HEADER_PROPERTIES, "textBody", "bodyValues"],
+                    "properties": [*HEADER_PROPERTIES, "textBody", "bodyValues", "attachments"],
                     "fetchTextBodyValues": True,
                     "maxBodyValueBytes": MAX_BODY_VALUE_BYTES,
                 },
@@ -215,8 +215,16 @@ async def run_read_email(client: JmapClient, args: read_email) -> ToolResult:
     )
     emails = []
     for email in results["c0"]["list"]:
-        body, truncated = _body(email, MAX_BODY_VALUE_BYTES)
-        emails.append({**_header(email), "body": body, "truncated": truncated})
+        body, truncated = body_text(email, MAX_BODY_VALUE_BYTES)
+        item = {**header_of(email), "body": body, "truncated": truncated}
+        attachments = email.get("attachments") or []
+        if attachments:
+            # Metadata only; read_attachment (A4) reads one by its index.
+            item["attachments"] = [
+                {"index": i, "name": a.get("name"), "type": a.get("type"), "size": a.get("size")}
+                for i, a in enumerate(attachments)
+            ]
+        emails.append(item)
     payload = {"emails": emails, "notFound": results["c0"].get("notFound", [])}
     return ToolResult(envelope(payload), frozenset(e["id"] for e in emails))
 
@@ -250,8 +258,8 @@ async def run_read_thread(client: JmapClient, args: read_thread) -> ToolResult:
         not_found.extend(results["c0"].get("notFound", []))
     emails = []
     for email in sorted(fetched, key=lambda e: e.get("receivedAt") or ""):
-        body, truncated = _body(email, THREAD_BODY_BYTES)
-        emails.append({**_header(email), "body": body, "truncated": truncated})
+        body, truncated = body_text(email, THREAD_BODY_BYTES)
+        emails.append({**header_of(email), "body": body, "truncated": truncated})
     payload = {
         "threadId": args.thread_id,
         "threadSize": len(ids),
@@ -279,6 +287,25 @@ async def run_list_mailboxes(client: JmapClient, args: list_mailboxes) -> ToolRe
 
 
 @dataclass(frozen=True)
+class MailboxIndex:
+    roles: dict[str, str]  # role -> mailbox id
+    top_level: dict[str, str]  # name -> id of mailboxes without a parent
+    names: dict[str, str]  # id -> name
+
+
+async def mailbox_index(client: JmapClient) -> MailboxIndex:
+    out = await client.call(
+        [("Mailbox/get", {"ids": None, "properties": ["id", "name", "role", "parentId"]})]
+    )
+    boxes = out["c0"]["list"]
+    return MailboxIndex(
+        roles={b["role"]: b["id"] for b in boxes if b.get("role")},
+        top_level={b["name"]: b["id"] for b in boxes if not b.get("parentId")},
+        names={b["id"]: b["name"] for b in boxes},
+    )
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     args: type[_Args]
     run: Tool
@@ -291,3 +318,46 @@ ASK_TOOLS: dict[str, ToolSpec] = {
     "read_thread": ToolSpec(read_thread, run_read_thread),
     "list_mailboxes": ToolSpec(list_mailboxes, run_list_mailboxes),
 }
+
+
+class semantic_search(_Args):
+    """Find emails by meaning rather than exact words, for example "trips I booked
+    last spring". Returns emails (best match first) with headers and a preview."""
+
+    query: str = Field(min_length=1, max_length=500, description="What to look for.")
+    limit: int = Field(10, ge=1, le=25, description="Maximum emails to return.")
+
+
+async def run_semantic_search(client: JmapClient, args: semantic_search) -> ToolResult:
+    session = await client.session()
+    results = await client.call(
+        [
+            (
+                SEMANTIC_QUERY,
+                {"text": args.query, "limit": min(args.limit, session.max_objects_in_get)},
+            ),
+            (
+                "Email/get",
+                {
+                    "#ids": ref("c0", SEMANTIC_QUERY, "/ids"),
+                    "properties": [*HEADER_PROPERTIES, "preview"],
+                },
+            ),
+        ]
+    )
+    emails = [{**header_of(e), "preview": e.get("preview")} for e in results["c1"]["list"]]
+    return ToolResult(envelope({"emails": emails}), frozenset(e["id"] for e in emails))
+
+
+def read_tools(session: Session, features: frozenset[str]) -> dict[str, ToolSpec]:
+    """The read tools of this session: A0's, plus the A4 tools the
+    deployment enables (features) and, for semantic search, the server
+    advertises."""
+    from .attachments import read_attachment, run_read_attachment
+
+    tools = dict(ASK_TOOLS)
+    if "attachments" in features and session.download_url:
+        tools["read_attachment"] = ToolSpec(read_attachment, run_read_attachment)
+    if "semantic" in features and session.semantic:
+        tools["semantic_search"] = ToolSpec(semantic_search, run_semantic_search)
+    return tools

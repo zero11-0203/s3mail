@@ -33,6 +33,11 @@ output "candidate_version" {
   value       = module.agent.candidate_version
 }
 
+output "triage_dlq_url" {
+  description = "Failed triage events: inspect, fix the cause (often agent login), then redrive."
+  value       = module.agent.triage_dlq_url
+}
+
 output "workload_identity_arn" {
   description = "The runtime's workload identity; allow the login return URL on it once."
   value       = module.agent.workload_identity_arn

@@ -1,4 +1,4 @@
-# Offline checks of the agent A0 contract (docs/specs/agent.md).
+# Offline checks of the agent's contract (docs/specs/agent.md).
 
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
@@ -35,6 +35,26 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_dynamodb_table" {
+    defaults = { arn = "arn:aws:dynamodb:us-east-1:111111111111:table/s3mail-agent" }
+  }
+
+  mock_resource "aws_sqs_queue" {
+    defaults = { arn = "arn:aws:sqs:us-east-1:111111111111:s3mail-agent-triage", url = "https://sqs.us-east-1.amazonaws.com/111111111111/s3mail-agent-triage" }
+  }
+
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = { arn = "arn:aws:events:us-east-1:111111111111:rule/s3mail-events/s3mail-agent-received" }
+  }
+
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = { arn = "arn:aws:logs:us-east-1:111111111111:log-group:/aws/lambda/s3mail-agent-trigger" }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = { arn = "arn:aws:lambda:us-east-1:111111111111:function:s3mail-agent-trigger" }
+  }
+
   mock_resource "aws_bedrockagentcore_agent_runtime" {
     defaults = {
       agent_runtime_id      = "s3mail_agent-abc"
@@ -52,6 +72,8 @@ variables {
   oauth_client_id  = "agentclient"
   oauth_scopes     = ["s3mail/mail.read"]
   live_version     = "1"
+  event_bus_name   = "s3mail-events"
+  trigger_zip      = "tests/fake-lambda.txt"
 }
 
 run "runtime_role_has_no_mail_access" {
@@ -59,9 +81,16 @@ run "runtime_role_has_no_mail_access" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.runtime[0].policy).Statement :
-      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey))$", a))])
+      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|BatchCreateMemoryRecords|ListMemoryRecords|BatchDeleteMemoryRecords|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|dynamodb:(GetItem|PutItem|Query|BatchGetItem)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey))$", a))])
     ])
-    error_message = "the runtime role grants only image, logs, traces, Memory, Identity and its own secrets: no Bedrock models, S3, DynamoDB, SQS or index access"
+    error_message = "the runtime role grants only image, logs, traces, Memory, Identity, its own secrets and table: no Bedrock models, S3, SQS, index or mail access"
+  }
+
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.runtime[0].policy).Statement :
+      alltrue([for r in flatten([s.Resource]) : startswith(r, aws_dynamodb_table.agent.arn)]) if anytrue([for a in flatten([s.Action]) : startswith(a, "dynamodb:")])
+    ])
+    error_message = "the runtime's only table is the agent's own"
   }
 
   assert {
@@ -123,6 +152,15 @@ run "telemetry_is_content_free_and_lifecycle_bounded" {
   }
 
   assert {
+    condition = (
+      aws_bedrockagentcore_agent_runtime.this[0].environment_variables["TRIAGE_MODEL"] == "openai/gpt-6-luna" &&
+      aws_bedrockagentcore_agent_runtime.this[0].environment_variables["AGENT_TABLE"] == aws_dynamodb_table.agent.name &&
+      aws_bedrockagentcore_agent_runtime.this[0].environment_variables["AGENT_FEATURES"] == ""
+    )
+    error_message = "triage uses its pinned model, and A4 tools are off by default"
+  }
+
+  assert {
     condition     = length(aws_bedrockagentcore_agent_runtime.this[0].authorizer_configuration) == 0
     error_message = "inbound is SigV4 only until webmail chat"
   }
@@ -148,6 +186,109 @@ run "stores_are_encrypted_and_expiring" {
     )
     error_message = "the provider reads the owner-set secret; Terraform never holds it"
   }
+}
+
+run "agent_table_expires_and_uses_the_agent_key" {
+  command = apply
+
+  assert {
+    condition = (
+      aws_dynamodb_table.agent.ttl[0].attribute_name == "expires" && aws_dynamodb_table.agent.ttl[0].enabled &&
+      aws_dynamodb_table.agent.server_side_encryption[0].kms_key_arn == aws_kms_key.this.arn &&
+      length(aws_dynamodb_table.agent.point_in_time_recovery) == 0
+    )
+    error_message = "agent rows expire, use the agent key and have no backup"
+  }
+}
+
+run "trigger_only_consumes_its_queue_and_invokes_live" {
+  command = apply
+
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.trigger[0].policy).Statement :
+      alltrue([for a in flatten([s.Action]) : can(regex("^(logs:(CreateLogStream|PutLogEvents)|sqs:(ReceiveMessage|DeleteMessage|GetQueueAttributes)|bedrock-agentcore:InvokeAgentRuntime(ForUser)?|xray:(PutTraceSegments|PutTelemetryRecords))$", a))])
+    ])
+    error_message = "the trigger has no mail, Memory, Identity, model or table access"
+  }
+
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.trigger[0].policy).Statement :
+      alltrue([for r in flatten([s.Resource]) : contains([aws_bedrockagentcore_agent_runtime.this[0].agent_runtime_arn, "${aws_bedrockagentcore_agent_runtime.this[0].agent_runtime_arn}/runtime-endpoint/live"], r)])
+      if s.Sid == "InvokeLive"
+    ])
+    error_message = "the trigger invokes only this runtime's live endpoint"
+  }
+
+  assert {
+    condition     = aws_lambda_function.trigger[0].environment[0].variables["QUALIFIER"] == "live"
+    error_message = "triage runs only on the approved version"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_event_rule.received[0].event_pattern).source[0] == "s3mail.mail" &&
+      jsondecode(aws_cloudwatch_event_rule.received[0].event_pattern)["detail-type"][0] == "EmailReceived" &&
+      aws_cloudwatch_event_rule.received[0].event_bus_name == "s3mail-events"
+    )
+    error_message = "the rule matches only EmailReceived on the mail bus"
+  }
+
+  assert {
+    condition     = jsondecode(aws_sqs_queue_policy.triage[0].policy).Statement[0].Condition.ArnEquals["aws:SourceArn"] == aws_cloudwatch_event_rule.received[0].arn
+    error_message = "only the agent's rule may send to the triage queue"
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_sqs_queue.triage[0].redrive_policy).maxReceiveCount == 5 &&
+      aws_sqs_queue.triage[0].visibility_timeout_seconds == 720 &&
+      aws_lambda_event_source_mapping.triage[0].batch_size == 1 &&
+      aws_lambda_event_source_mapping.triage[0].scaling_config[0].maximum_concurrency == 2 &&
+      contains(aws_lambda_event_source_mapping.triage[0].function_response_types, "ReportBatchItemFailures")
+    )
+    error_message = "failed runs retry five times into the DLQ, one at a time, at most two at once"
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.digest) == 0
+    error_message = "no digest is scheduled until mail.write is granted"
+  }
+}
+
+run "digest_schedule_delivers_mail" {
+  command = apply
+
+  variables {
+    digest_schedule = "cron(0 7 * * ? *)"
+  }
+
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_target.digest[0].input).digest == "mail" && aws_lambda_permission.digest[0].source_arn == aws_cloudwatch_event_rule.digest[0].arn
+    error_message = "only the digest rule invokes the trigger, with the digest input"
+  }
+}
+
+run "no_trigger_without_the_bus" {
+  command = plan
+
+  variables {
+    event_bus_name = null
+  }
+
+  assert {
+    condition     = length(aws_lambda_function.trigger) == 0 && length(aws_sqs_queue.triage) == 0 && length(aws_cloudwatch_event_rule.received) == 0
+    error_message = "A0 deployments create no trigger"
+  }
+}
+
+run "features_are_known_tools" {
+  command = plan
+
+  variables {
+    features = ["attachments", "browse"]
+  }
+
+  expect_failures = [var.features]
 }
 
 run "a_new_version_does_not_move_live" {

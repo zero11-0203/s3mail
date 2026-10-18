@@ -48,7 +48,14 @@ module "agent" {
   oauth_client_id  = var.oauth_client_id
   oauth_scopes     = var.oauth_scopes
   ask_model        = var.ask_model
+  triage_model     = var.triage_model
+  features         = var.features
   live_version     = var.live_version
+
+  # A1 trigger: with the bus name and the zip from make agent-build.
+  event_bus_name  = var.event_bus_name
+  trigger_zip     = var.event_bus_name == null ? null : var.trigger_zip
+  digest_schedule = var.digest_schedule
 }
 
 # Agent-specific spend (docs/specs/agent.md#deployment-and-operations). Tag

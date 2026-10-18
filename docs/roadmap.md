@@ -71,6 +71,8 @@ Architecture choices are made; configured implementations still need proof. Reso
 
 The [mail agent](specs/agent.md) is optional and lower priority. It begins after the mail system's Phase 3 cutover requirements pass; neither that prerequisite nor primary-mail operation depends on the browser deployment, and the mail system never depends on the agent. Each phase adds one class of side effect and the OAuth scope it needs, and starts only after the previous phase's [gate](specs/agent.md#acceptance-checks) passes. A0–A3 are independent of Phase 4; only webmail chat in A4 needs it.
 
+**Owner decision (2026-10-18): build A1–A4 ahead of the cutover.** The owner chose to implement the later agent phases before the Phase 3 cutover, as with A0. The code for A1–A4 is built and tested together, but the order of side effects is kept: A1 is deployed with `mail.read` only, and the agent's Cognito client gets `mail.write` and then `mail.submit` only after the A1 and then the A2 gate passes ([granting a scope](operations/deployment.md#granting-agent-scopes)). The A4 tools are off until their own evaluations pass. The cutover requirements and mail operation still never depend on the agent.
+
 ### A0 — MVP: verify the path
 
 - Prerequisite: register the agent's Cognito app client with `s3mail/mail.read` only and add it to the authorizer allowlist in `infra/main`.
@@ -81,15 +83,19 @@ The [mail agent](specs/agent.md) is optional and lower priority. It begins after
 ### A1 — Triage and digest
 
 - Add the EventBridge rule on `EmailReceived`, the queue, DLQ and trigger Lambda, the agent table, triage mode and the daily digest. The scope stays `mail.read`.
+- Implemented with offline tests and the triage evaluation (2026-10-18); the deployment and the remaining gate checks are recorded in the [A1 gate](specs/agent.md#a1-gate-triage-and-digest).
 
 ### A2 — Drafts
 
-- Grant `mail.write`. Add reply drafts restricted to the Drafts mailbox, the digest imported as an email and owner-stated preferences in long-term memory.
+- Grant `mail.write`. Add reply drafts restricted to the Drafts mailbox, the digest delivered as an email and owner-stated preferences in long-term memory.
+- Implemented with offline tests; deployed in the same image, but `mail.write` is not granted, so the write modes stop with `scope_not_granted`.
 
 ### A3 — Approved actions
 
 - Grant `mail.submit`. Add proposals, approval interrupts, the hash-checked executor and the send-once marker for organising actions and sending reviewed drafts, plus reply reminders.
+- Implemented with offline tests (the approval scenarios run against a stateful fake server); `mail.submit` is not granted.
 
 ### A4 — Measured extensions
 
 - Choose from what A1–A3 show is used: semantic search through `docs_vec` and a custom JMAP capability, attachment text, the tools as an MCP server behind AgentCore Gateway, and webmail chat after Phase 4. Each ships with its own evaluation gate.
+- The owner chose attachment text and semantic search (embeddings through OpenRouter). Both agent tools are implemented behind `AGENT_FEATURES`, off by default; the server side of semantic search (embeddings in the indexer and the `SemanticEmail/query` method) is not built yet. The MCP server and webmail chat are deferred: nothing outside the CLI uses the tools yet, and webmail chat needs Phase 4.

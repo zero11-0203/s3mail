@@ -5,7 +5,7 @@ GOLANGCI_LINT ?= golangci-lint
 TF_DIRS := infra/bootstrap infra/main infra/webmail infra/agent
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image agent-check agent-eval agent-image
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build agent-build webmail-image agent-check agent-eval agent-image
 
 check: go-check agent-check tf-check secrets
 
@@ -67,6 +67,9 @@ SPIKE_LAMBDAS := spike-stream authorizer
 build: $(addprefix lambda-,$(LAMBDAS))
 
 spike-build: $(addprefix lambda-,$(SPIKE_LAMBDAS))
+
+# The mail agent's trigger (infra/agent, applied separately from infra/main).
+agent-build: lambda-agent-trigger
 
 lambda-%:
 	@echo "build $*"

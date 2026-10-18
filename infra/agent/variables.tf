@@ -35,6 +35,36 @@ variable "ask_model" {
   default     = "openai/gpt-6.1-sol"
 }
 
+variable "triage_model" {
+  description = "Pinned OpenRouter model id for triage and the digest overview."
+  type        = string
+  default     = "openai/gpt-6-luna"
+}
+
+variable "features" {
+  description = "Optional A4 agent tools: attachments, semantic."
+  type        = list(string)
+  default     = []
+}
+
+variable "event_bus_name" {
+  description = "infra/main output agent.event_bus_name; null creates no A1 trigger. Run make agent-build first."
+  type        = string
+  default     = null
+}
+
+variable "trigger_zip" {
+  description = "Trigger Lambda zip, built by make agent-build."
+  type        = string
+  default     = "../../go/build/agent-trigger/bootstrap.zip"
+}
+
+variable "digest_schedule" {
+  description = "Daily digest delivered as mail, such as cron(0 7 * * ? *) (UTC); needs mail.write. Null schedules none."
+  type        = string
+  default     = null
+}
+
 variable "image_digest" {
   description = "Digest of the pushed agent image (sha256:...), printed by make agent-image. Null deploys no runtime."
   type        = string

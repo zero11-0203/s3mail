@@ -68,6 +68,58 @@ variable "ask_model" {
   default     = "openai/gpt-6.1-sol"
 }
 
+variable "triage_model" {
+  description = "Pinned OpenRouter model id for triage and the digest overview; a change is a release with a triage evaluation run."
+  type        = string
+  default     = "openai/gpt-6-luna"
+}
+
+variable "features" {
+  description = "Optional A4 tools: attachments (attachment text) and semantic (needs the server's semantic search capability)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for f in var.features : contains(["attachments", "semantic"], f)])
+    error_message = "features are attachments and semantic."
+  }
+}
+
+variable "event_bus_name" {
+  description = "The mail system's event bus (infra/main output agent.event_bus_name). Null creates no trigger."
+  type        = string
+  default     = null
+}
+
+variable "trigger_zip" {
+  description = "The trigger Lambda zip built by make agent-build (go/build/agent-trigger/bootstrap.zip). Null creates no trigger."
+  type        = string
+  default     = null
+}
+
+variable "trigger_timeout_seconds" {
+  description = "Trigger Lambda timeout: one triage or digest run; the queue's visibility timeout is six times this."
+  type        = number
+  default     = 120
+}
+
+variable "trigger_concurrency" {
+  description = "Most triage runs at once (the SQS event source minimum is 2)."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.trigger_concurrency >= 2 && var.trigger_concurrency <= 10
+    error_message = "trigger_concurrency is 2 to 10."
+  }
+}
+
+variable "digest_schedule" {
+  description = "Schedule of the daily digest delivered as mail, such as cron(0 7 * * ? *) (UTC). It needs mail.write; null schedules none."
+  type        = string
+  default     = null
+}
+
 variable "model_base_url" {
   description = "OpenAI-compatible model API base URL."
   type        = string

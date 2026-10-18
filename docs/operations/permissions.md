@@ -138,6 +138,7 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `DrainOwnAccountOutbox` | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:DeleteItem` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadTableStream` | `dynamodb:DescribeStream`, `dynamodb:GetRecords`, `dynamodb:GetShardIterator`, `dynamodb:ListStreams` | the table's stream | — |
 | `SendWakeUps` | `sqs:SendMessage` | `s3mail-index` and `s3mail-submit` queues | — |
+| `PublishMailEvents` | `events:PutEvents` | the `s3mail-events` bus | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 `DeleteItem` acknowledges outbox entries after their destination accepted the work; the code deletes only `OUTBOX#` keys, but IAM cannot restrict sort-key prefixes, so the shared-table limitation applies. The stream carries keys only, never mail content.
@@ -243,13 +244,29 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords`, `xray:GetSamplingRules`, `xray:GetSamplingTargets` | `*` | — |
 | `PutMetrics` | `cloudwatch:PutMetricData` | `*` | `cloudwatch:namespace` = `bedrock-agentcore` |
 | `Checkpoints` | `bedrock-agentcore:CreateEvent`, `GetEvent`, `ListEvents`, `DeleteEvent`, `ListSessions` | the agent's one Memory | — |
+| `Preferences` | `bedrock-agentcore:BatchCreateMemoryRecords`, `ListMemoryRecords`, `BatchDeleteMemoryRecords` | the agent's one Memory | — |
+| `AgentTable` | `dynamodb:GetItem`, `PutItem`, `Query`, `BatchGetItem` | the `s3mail-agent` table and its `reply` index | — |
 | `WorkloadToken` | `bedrock-agentcore:GetWorkloadAccessToken`, `GetWorkloadAccessTokenForUserId` | the default workload-identity directory and `s3mail_agent-*` identities | — |
 | `OwnerToken` | `bedrock-agentcore:GetResourceOauth2Token` | the default token vault, the `s3mail-agent-cognito` provider and those identities | — |
 | `ReadClientSecret` | `secretsmanager:GetSecretValue` | the `s3mail-agent/cognito-client` secret | — |
 | `ReadModelKey` | `secretsmanager:GetSecretValue` | the `s3mail-agent/model-api-key` secret (the OpenRouter key) | — |
-| `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager or AgentCore in the region |
+| `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager, AgentCore or DynamoDB in the region |
 
-**Excluded:** any Bedrock model, mail bucket, mail table, queue, KMS key other than the agent's, search index, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
+**Excluded:** any Bedrock model, mail bucket, mail table, queue, KMS key other than the agent's, search index, deletes or scans on the agent table, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
+
+### `s3mail-agent-trigger` (agent trigger Lambda)
+
+- **Module:** `infra/modules/agent`, created only with a runtime, the trigger zip and the mail system's event bus name (agent A1).
+- **Purpose:** start one [triage run](../specs/agent.md#langgraph-design) per `EmailReceived` message on the agent's queue, and the scheduled digest, on the runtime's `live` endpoint. It holds no mail, Memory, Identity or table access; the runtime reads mail with the owner's tokens.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-agent-trigger` log group | — |
+| `ConsumeQueue` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | the `s3mail-agent-triage` queue | — |
+| `InvokeLive` | `bedrock-agentcore:InvokeAgentRuntime`, `InvokeAgentRuntimeForUser` | the agent runtime and its `live` endpoint | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
+
+`InvokeAgentRuntimeForUser` is needed because the trigger passes the owner's user id, as the CLI does. **Excluded:** the `DEFAULT` endpoint, any model, Memory, token, secret, DynamoDB, S3 or other queue grant.
 
 ## Resource policies
 
@@ -273,6 +290,9 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | Submission DLQ | — | Redrive allowed only from the submission queue | — |
 | `s3mail-outbound-webhook` `live` alias | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/*/POST/webhooks/smtp2go` (no gateway authorizer; the function checks the bearer secret) |
 | Delivery DLQ | — | Redrive allowed only from the delivery queue | — |
+| `s3mail-agent-triage` queue (agent A1) | `events.amazonaws.com` | `sqs:SendMessage` | `aws:SourceArn` = the `s3mail-agent-received` rule on the `s3mail-events` bus |
+| Agent triage DLQ | — | Redrive allowed only from the triage queue | — |
+| `s3mail-agent-trigger` (agent A2, optional) | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-agent-digest` schedule rule |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
 | `s3mail-webmail` `live` alias (Phase 4) | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<webmail api>/*/*` (no gateway authorizer; the server's own session checks protect the application) |
 | `s3mail-webmail` ECR repository (Phase 4) | `lambda.amazonaws.com` | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | `aws:sourceArn` like `arn:aws:lambda:<region>:<account>:function:s3mail-webmail*` |
@@ -284,4 +304,4 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
 - The owner-recovery role, which the owner chose not to create. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.
-- The agent's later roles: the A1 trigger Lambda, its CI build and gated deploy roles and the evaluation runner ([agent roles](../specs/agent.md#identity-and-authorization)).
+- The agent's CI build and gated deploy roles and the evaluation runner ([agent roles](../specs/agent.md#identity-and-authorization)); evaluations run with the owner's credentials.

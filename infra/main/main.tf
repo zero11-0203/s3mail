@@ -61,6 +61,7 @@ module "auth" {
   webmail_callback_urls  = local.webmail_origin == null ? [] : [for l in var.webmail_locales : "${local.webmail_origin}/${l}/auth/callback"]
   # Later mail agent: its app client only; infra/agent deploys the agent.
   agent_callback_urls = compact([var.agent_callback_url])
+  agent_scopes        = var.agent_scopes
 }
 
 module "jmap_api" {
