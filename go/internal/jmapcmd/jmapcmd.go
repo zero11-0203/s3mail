@@ -81,6 +81,8 @@ func Start(component string, h Handler) {
 	srv.Uploads = &store.Uploads{S3: s3c, Bucket: env["BLOBS_BUCKET"]}
 	if fn := os.Getenv("SEARCH_FUNCTION"); fn != "" {
 		srv.Searcher = &searchcmd.LambdaSearcher{Lambda: awslambda.NewFromConfig(cfg), Function: fn}
+		// The search function embeds queries only with its own EMBED_MODEL.
+		srv.Semantic = os.Getenv("SEMANTIC") == "true"
 	}
 	if aliases := os.Getenv("SEND_ALIASES"); aliases != "" {
 		policy, err := sendcmd.PolicyFromEnv()

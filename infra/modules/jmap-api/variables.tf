@@ -93,6 +93,12 @@ variable "search_function_arn" {
   default     = null
 }
 
+variable "semantic" {
+  description = "Advertise SemanticEmail/query; only when the search function embeds (docs/specs/jmap.md#semantic-search)."
+  type        = bool
+  default     = false
+}
+
 variable "sending" {
   description = "Enables Identity and EmailSubmission on the API function. Null disables submission."
   type = object({

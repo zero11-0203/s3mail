@@ -1,7 +1,8 @@
 // Command search-indexer is the single index writer: each batch of queue
 // wake-ups runs one replay and publication (docs/specs/search.md#index-pipeline).
 //
-// Environment: TABLE, ACCOUNT_ID and INDEX_BUCKET. The function's reserved
+// Environment: TABLE, ACCOUNT_ID and INDEX_BUCKET; optionally EMBED_MODEL
+// and EMBED_KEY_SECRET for semantic vectors. The function's reserved
 // concurrency is one and its ephemeral storage holds the working copy and
 // snapshot under /tmp.
 package main
@@ -34,6 +35,7 @@ func main() {
 		Objects:   &store.IndexObjects{S3: s3c, Bucket: env["INDEX_BUCKET"]},
 		Key:       searchcmd.IndexKey(env["ACCOUNT_ID"]),
 		Dir:       os.TempDir(),
+		Embedder:  searchcmd.Embedder(cfg),
 	}
 	lambda.Start(telemetry.Func(func(ctx context.Context, ev events.SQSEvent) error {
 		inv := ix

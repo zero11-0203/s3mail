@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,8 @@ type Indexer struct {
 	Dir       string
 	Log       *slog.Logger
 	Now       func() time.Time
+	// Embedder adds semantic vectors to each publication; nil adds none.
+	Embedder Embedder
 }
 
 func (ix *Indexer) now() time.Time {
@@ -193,6 +196,7 @@ func (ix *Indexer) Run(ctx context.Context) error {
 	if err := x.Apply(docs, deleted, next); err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
+	embedded := ix.embed(ctx, x)
 	snap := filepath.Join(ix.Dir, "snap-"+next.Generation+".db")
 	defer func() { _ = os.Remove(snap) }()
 	if err := x.Snapshot(snap); err != nil {
@@ -209,8 +213,49 @@ func (ix *Indexer) Run(ctx context.Context) error {
 	if err := ix.register(ctx, reg, registered, next, obj); err != nil {
 		return err
 	}
-	ix.Log.Info("index published", "generation", next.Generation, "seq", next.Seq, "docs", len(docs), "deleted", len(deleted))
+	ix.Log.Info("index published", "generation", next.Generation, "seq", next.Seq, "docs", len(docs), "deleted", len(deleted), "embedded", embedded)
 	return nil
+}
+
+// embed adds vectors for up to MaxEmbedPerRun indexed Emails that lack
+// one, newest first, and returns how many it added. It is best effort:
+// keyword search never waits on the embedding API, and Emails left
+// without a vector are retried on the next publication.
+func (ix *Indexer) embed(ctx context.Context, x *Index) int {
+	if ix.Embedder == nil {
+		return 0
+	}
+	if err := x.UseModel(ix.Embedder.Model()); err != nil {
+		ix.Log.Warn("embedding skipped", "error", err)
+		return 0
+	}
+	missing, err := x.MissingVectors(MaxEmbedPerRun)
+	if err != nil {
+		ix.Log.Warn("embedding skipped", "error", err)
+		return 0
+	}
+	added := 0
+	for batch := range slices.Chunk(missing, embedBatch) {
+		texts := make([]string, len(batch))
+		for i, p := range batch {
+			texts[i] = p.Text
+		}
+		vecs, err := ix.Embedder.Embed(ctx, texts)
+		if err != nil {
+			ix.Log.Warn("embedding failed", "error", err, "pending", len(missing)-added)
+			break
+		}
+		put := make(map[int64][]float32, len(batch))
+		for i, p := range batch {
+			put[p.Row] = vecs[i]
+		}
+		if err := x.PutVectors(put); err != nil {
+			ix.Log.Warn("embedding not stored", "error", err)
+			break
+		}
+		added += len(batch)
+	}
+	return added
 }
 
 // docs reads the live Emails among ids; the rest are removed.
@@ -282,11 +327,14 @@ func (ix *Indexer) register(ctx context.Context, prev model.SearchIndex, registe
 
 // Request is the search function's internal protocol.
 type Request struct {
-	// Op is "match" or "snippets".
+	// Op is "match", "snippets" or "semantic".
 	Op         string      `json:"op"`
 	Conditions []Condition `json:"conditions,omitempty"`
 	EmailIDs   []string    `json:"emailIds,omitempty"`
 	Terms      []string    `json:"terms,omitempty"`
+	// Text and Limit are a semantic query.
+	Text  string `json:"text,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 // Response answers a Request from one generation.
@@ -294,7 +342,9 @@ type Response struct {
 	Generation string             `json:"generation"`
 	Matches    [][]string         `json:"matches,omitempty"`
 	Snippets   map[string]Snippet `json:"snippets,omitempty"`
-	// Error is "notReady" or "lagging" for retryable unavailability.
+	Hits       []Hit              `json:"hits,omitempty"`
+	// Error is "notReady" or "lagging" for retryable unavailability, or
+	// "semanticUnavailable" when no embedder is configured.
 	Error string `json:"error,omitempty"`
 }
 
@@ -306,6 +356,8 @@ type Reader struct {
 	Dir     string
 	Log     *slog.Logger
 	Now     func() time.Time
+	// Embedder embeds semantic queries; nil refuses them.
+	Embedder Embedder
 
 	mu        sync.Mutex
 	gen       string
@@ -326,6 +378,21 @@ func (r *Reader) now() time.Time {
 
 // Serve answers one request; every answer comes from one generation.
 func (r *Reader) Serve(ctx context.Context, req Request) (Response, error) {
+	var query []float32
+	if req.Op == "semantic" {
+		// Embedded before the lock: the model call is the slow part.
+		if r.Embedder == nil {
+			return Response{Error: "semanticUnavailable"}, nil
+		}
+		if req.Limit <= 0 || req.Limit > MaxSemanticLimit || strings.TrimSpace(req.Text) == "" || len(req.Text) > maxSemanticText {
+			return Response{}, fmt.Errorf("semantic query: invalid text or limit")
+		}
+		vecs, err := r.Embedder.Embed(ctx, []string{req.Text})
+		if err != nil {
+			return Response{}, err
+		}
+		query = vecs[0]
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.index == nil || r.now().Sub(r.checkedAt) >= refreshEvery {
@@ -358,6 +425,12 @@ func (r *Reader) Serve(ctx context.Context, req Request) (Response, error) {
 		for id, v := range stored {
 			resp.Snippets[id] = Highlight(v[0], v[1], req.Terms)
 		}
+	case "semantic":
+		hits, err := r.index.Nearest(query, req.Limit)
+		if err != nil {
+			return Response{}, err
+		}
+		resp.Hits = hits
 	default:
 		return Response{}, fmt.Errorf("unknown op %q", req.Op)
 	}

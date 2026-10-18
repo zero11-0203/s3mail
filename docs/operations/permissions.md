@@ -106,6 +106,7 @@
 | `PublishIndex` | `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject` | `<index bucket>/index/*` | — |
 | `FindIndex` | `s3:ListBucket` | index bucket | — |
 | `ConsumeWakeUps` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `s3mail-index` queue | — |
+| `ReadEmbeddingKey` | `secretsmanager:GetSecretValue` | `s3mail/embeddings-api-key` secret, only with `embedding_model` | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 A registration updates STATE and writes the SEARCH and one CHANGE record. `ListBucket` makes `HeadObject` on the not-yet-created index return 404 rather than 403; the bucket holds only index objects. The shared-table limitation applies.
@@ -120,12 +121,13 @@ A registration updates STATE and writes the SEARCH and one CHANGE record. `ListB
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/lambda/s3mail-search-search` log group | — |
 | `ReadOwnAccountPartition` | `dynamodb:GetItem`, `dynamodb:Query` | `s3mail-mail` table | `dynamodb:LeadingKeys` = `ACCOUNT#<account>` |
 | `ReadIndexVersions` | `s3:GetObjectVersion` | `<index bucket>/index/*` | — |
+| `ReadEmbeddingKey` | `secretsmanager:GetSecretValue` | `s3mail/embeddings-api-key` secret, only with `embedding_model` | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | `*` | — |
 
 **Excluded for all search roles:**
 - No `dynamodb:DeleteItem`, no S3 delete of originals or index versions, no `dynamodb:Scan`.
 - Only the indexer writes (the table and the index bucket) and only it reads mail content; the search role cannot read originals.
-- No SES, SNS, secrets, IAM or `sts:AssumeRole`.
+- No SES, SNS, IAM or `sts:AssumeRole`, and no secret other than the optional [semantic search](../specs/search.md#semantic-search) embeddings key; that secret uses the AWS-managed Secrets Manager key, so no KMS grant is needed.
 
 ### `s3mail-outbound-dispatcher` (Lambda execution role)
 

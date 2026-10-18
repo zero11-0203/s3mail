@@ -147,6 +147,25 @@ run "only_the_api_invokes_search" {
     condition     = aws_lambda_function.fn["api"].environment[0].variables["SEARCH_FUNCTION"] == var.search_function_arn && !contains(keys(aws_lambda_function.fn["download"].environment[0].variables), "SEARCH_FUNCTION")
     error_message = "only the API function is configured for search"
   }
+
+  assert {
+    condition     = !contains(keys(aws_lambda_function.fn["api"].environment[0].variables), "SEMANTIC")
+    error_message = "semantic search is off unless the search function embeds"
+  }
+}
+
+run "semantic_needs_search" {
+  command = apply
+
+  variables {
+    search_function_arn = "arn:aws:lambda:us-east-1:111111111111:function:s3mail-search-search:live"
+    semantic            = true
+  }
+
+  assert {
+    condition     = aws_lambda_function.fn["api"].environment[0].variables["SEMANTIC"] == "true" && !contains(keys(aws_lambda_function.fn["download"].environment[0].variables), "SEMANTIC")
+    error_message = "only the API function advertises SemanticEmail/query"
+  }
 }
 
 run "cors_is_off_by_default" {

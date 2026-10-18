@@ -41,3 +41,9 @@ variable "log_retention_days" {
   type    = number
   default = 30
 }
+
+variable "embedding_model" {
+  description = "Embeddings model id (OpenRouter) for semantic search; null keeps it off. Mail text then leaves AWS (docs/specs/search.md#semantic-search)."
+  type        = string
+  default     = null
+}

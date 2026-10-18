@@ -387,6 +387,8 @@ func (s *Server) search(ctx context.Context, req search.Request) (search.Respons
 		return resp, methodErr("serverUnavailable", "the search index is being built; retry later")
 	case "lagging":
 		return resp, methodErr("serverUnavailable", "the search index is behind; retry later")
+	case "semanticUnavailable":
+		return resp, methodErr("serverUnavailable", "semantic search is not configured on the search function")
 	}
 	return resp, s.fail("search", fmt.Errorf("search error %q", resp.Error))
 }

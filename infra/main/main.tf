@@ -88,6 +88,7 @@ module "jmap_api" {
   originals_bucket_arn  = module.mail_inbound.originals_bucket_arn
   ses_key_prefix        = module.mail_inbound.ses_key_prefix
   search_function_arn   = module.search.search_function_arn
+  semantic              = module.search.semantic
   webhook               = module.mail_outbound.webhook
   sending = {
     domain        = var.domain
@@ -110,6 +111,7 @@ module "search" {
   account_id           = module.mail_store.account_id
   account_partition    = module.mail_store.account_partition
   originals_bucket_arn = module.mail_inbound.originals_bucket_arn
+  embedding_model      = var.embedding_model
 }
 
 module "relay_smtp2go" {

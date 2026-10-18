@@ -160,7 +160,7 @@ func (c *call) decode(v any, accountID *string) *MethodError {
 
 // Validate checks the request envelope before any method runs.
 func (s *Server) validate(req *Request) *Problem {
-	known := map[string]bool{CapCore: true, CapMail: true, CapSubmission: s.Sending != nil}
+	known := map[string]bool{CapCore: true, CapMail: true, CapSubmission: s.Sending != nil, CapSemantic: s.semantic()}
 	if req.Using == nil {
 		return problem("notRequest", 400, "using is required")
 	}
@@ -220,7 +220,7 @@ func (s *Server) invoke(ctx context.Context, acct Account, using map[string]bool
 		return []Invocation{{Name: "error", Args: b, CallID: inv.CallID}}
 	}
 	m, ok := s.methods[inv.Name]
-	if !ok || !using[m.capability] || (m.capability == CapSubmission && s.Sending == nil) {
+	if !ok || !using[m.capability] || (m.capability == CapSubmission && s.Sending == nil) || (m.capability == CapSemantic && !s.semantic()) {
 		return fail(methodErr("unknownMethod", inv.Name))
 	}
 	if !acct.has(m.scope) {

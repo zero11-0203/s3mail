@@ -22,7 +22,10 @@ type Server struct {
 	Searcher Searcher
 	// Sending enables Identity and EmailSubmission; nil disables them.
 	Sending *Sending
-	Log     *slog.Logger
+	// Semantic advertises SemanticEmail/query; it needs a Searcher whose
+	// search function embeds queries.
+	Semantic bool
+	Log      *slog.Logger
 	// Now overrides the clock (tests).
 	Now func() time.Time
 	// PushPoll overrides PollInterval (tests).
@@ -62,6 +65,7 @@ func NewServer(baseURL string, store Store, originals Originals, log *slog.Logge
 		"EmailSubmission/query":        {CapSubmission, ScopeRead, submissionQuery},
 		"EmailSubmission/queryChanges": {CapSubmission, ScopeRead, submissionQueryChanges},
 		"EmailSubmission/set":          {CapSubmission, ScopeSubmit, submissionSet},
+		"SemanticEmail/query":          {CapSemantic, ScopeRead, semanticEmailQuery},
 	}
 	return s
 }
@@ -161,6 +165,10 @@ func (s *Server) Session(ctx context.Context, acct Account) (*Session, error) {
 		acctCaps[CapSubmission] = map[string]any{"maxDelayedSend": 0, "submissionExtensions": map[string]any{}}
 		primary[CapSubmission] = id
 	}
+	if s.semantic() {
+		caps[CapSemantic] = map[string]any{}
+		acctCaps[CapSemantic] = semanticCapability()
+	}
 	return &Session{
 		Capabilities: caps,
 		Accounts: map[string]SessionAccount{id: {
@@ -181,7 +189,11 @@ func (s *Server) Session(ctx context.Context, acct Account) (*Session, error) {
 
 // sessionState changes when anything in the session object would.
 func (s *Server) sessionState(acct Account, st State) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v1\x00%s\x00%d\x00%s\x00%s\x00%t", acct.InternalID, st.Epoch, acct.Username, s.BaseURL, s.Sending != nil)))
+	in := fmt.Sprintf("v1\x00%s\x00%d\x00%s\x00%s\x00%t", acct.InternalID, st.Epoch, acct.Username, s.BaseURL, s.Sending != nil)
+	if s.semantic() {
+		in += "\x00semantic"
+	}
+	sum := sha256.Sum256([]byte(in))
 	return hex.EncodeToString(sum[:8])
 }
 

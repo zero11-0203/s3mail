@@ -40,6 +40,14 @@ Methods and properties follow [JMAP Mail](https://www.rfc-editor.org/rfc/rfc8621
 
 Support custom capabilities in session discovery and method dispatch, so project extensions can be added without changing core request handling. MIME projection includes text/HTML parts, inline content IDs and attachments. OAuth, per-invocation scope enforcement and registered-origin CORS follow [security](security.md); the matrix includes supported unread state, multi-mailbox membership, filters, sorting and pagination.
 
+### Semantic search
+
+`urn:s3mail:params:jmap:semantic` is a project capability for the [mail agent](agent.md) and other clients, advertised only when the deployment embeds ([semantic search](search.md#semantic-search)). Its account capability reports `maxLimit` (64) and `maxTextLength` (1000).
+
+- **`SemanticEmail/query`** takes `accountId`, `text` (1–1,000 characters after trimming) and optional `limit` (1–64, default 20), and returns `accountId` and `ids` ranked by similarity. It requires `mail.read`. There is no filter, sort, position or query state; results are not cacheable, and `ids` works as a result reference for `Email/get`.
+- Ids come from the registered index generation, then pass the same live check as text conditions, so destroyed Emails never appear.
+- Unknown arguments are `invalidArguments`; an unconfigured or failing embedder is `serverUnavailable`; using the method without the capability is `unknownCapability`.
+
 ### Push
 
 Clients learn about changes by polling `*/changes` or through push. Polling must always work; push makes web clients update live.
@@ -67,4 +75,5 @@ Use the RFC-defined request, method and per-object errors. Expired/foreign state
 - **RFC conformance suite:** black-box HTTP tests organized by RFC 8620/8621 section: session discovery, method-level and request-level errors (`stateMismatch`, `cannotCalculateChanges`, `requestTooLarge`, …), result references, advertised limits being enforced. RFC examples serve as golden fixtures.
 - **Push:** state/search-ready notifications, `EmailDelivery` only on added Emails, filters, pings, closeafter, heartbeats, lease cleanup, account disable and reconnect at token expiry or the 15-minute ceiling.
 - Verify deployed binary upload boundaries, aggregate JSON/body budgets, safe download headers and stream termination with realistic JWT/header sizes.
+- **Semantic search:** the capability is absent unless configured; `SemanticEmail/query` enforces its limits and `mail.read`, and returns only live Emails.
 - Run the [authorization matrix](security.md#acceptance-checks), [sync model](storage-sync.md#acceptance-checks), [search checks](search.md#acceptance-checks) and [client replays](clients.md#acceptance-checks) before advertising dependent capabilities.

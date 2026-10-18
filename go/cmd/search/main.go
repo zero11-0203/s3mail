@@ -3,7 +3,8 @@
 // It is invoked directly with a search.Request; warm instances keep their
 // downloaded generation.
 //
-// Environment: TABLE, ACCOUNT_ID and INDEX_BUCKET.
+// Environment: TABLE, ACCOUNT_ID and INDEX_BUCKET; optionally EMBED_MODEL
+// and EMBED_KEY_SECRET to answer semantic queries.
 package main
 
 import (
@@ -25,10 +26,11 @@ func main() {
 	log := searchcmd.Logger("search")
 	cfg := searchcmd.Config()
 	r := &search.Reader{
-		Source:  &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]},
-		Objects: &store.IndexObjects{S3: s3.NewFromConfig(cfg), Bucket: env["INDEX_BUCKET"]},
-		Dir:     os.TempDir(),
-		Log:     log,
+		Source:   &store.Account{DB: dynamodb.NewFromConfig(cfg), Table: env["TABLE"], AccountID: env["ACCOUNT_ID"]},
+		Objects:  &store.IndexObjects{S3: s3.NewFromConfig(cfg), Bucket: env["INDEX_BUCKET"]},
+		Dir:      os.TempDir(),
+		Log:      log,
+		Embedder: searchcmd.Embedder(cfg),
 	}
 	lambda.Start(telemetry.Handler(func(ctx context.Context, req search.Request) (search.Response, error) {
 		resp, err := r.Serve(ctx, req)

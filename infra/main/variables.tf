@@ -105,6 +105,12 @@ variable "agent_scopes" {
   default     = ["mail.read"]
 }
 
+variable "embedding_model" {
+  description = "OpenRouter embeddings model for semantic search (docs/specs/search.md#semantic-search); null (default) keeps it off. When set, indexed mail text is sent to the provider."
+  type        = string
+  default     = null
+}
+
 variable "owner_subject" {
   description = "The owner's Cognito sub, mapped to the mail account (set in terraform.tfvars)."
   type        = string

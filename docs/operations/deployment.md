@@ -117,6 +117,15 @@ The optional [mail agent](../specs/agent.md) is a separate deployment unit, like
 - **Removal:** destroying `infra/agent` removes the agent and its derived stores only; unset `agent_callback_url` and apply main to remove the client.
 - **Cost attribution:** resources of this root carry the `Component=agent` tag; the optional budget filters on it.
 
+#### Semantic search
+
+Optional and off by default; it sends indexed mail text to OpenRouter ([data leaving AWS](../specs/security.md#data-leaving-aws)), so it is enabled only together with the agent's `semantic` tool, after the [A4 evaluation](../specs/agent.md#a4-features).
+
+1. Set `embedding_model = "openai/text-embedding-3-small"` in `infra/main/terraform.tfvars` and apply `infra/main` after `make build`. This creates the empty secret `s3mail/embeddings-api-key`, grants both search roles read access to it, configures the functions and advertises `SemanticEmail/query`.
+2. Store an OpenRouter key with a credit limit out of band: `aws secretsmanager put-secret-value --secret-id s3mail/embeddings-api-key --secret-string file://…` holding `{"api_key":"…"}`. Until then, embedding fails, the keyword index still publishes and semantic queries return `serverUnavailable`.
+3. Vectors fill 512 Emails per publication, newest first, as mail arrives; check the indexer's `embedded` log count. Changing the model clears and refills them.
+4. Turn it off by unsetting `embedding_model`: the capability disappears and the vectors stay in the rebuildable index until a model is set again.
+
 #### Granting agent scopes
 
 Each scope is granted only after the previous gate passes ([agent phases](../roadmap.md#agent-phases)): `mail.write` after the A1 gate, `mail.submit` after the A2 gate.

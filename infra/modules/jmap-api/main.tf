@@ -195,6 +195,7 @@ resource "aws_lambda_function" "fn" {
       },
       var.cors_origin == null ? {} : { CORS_ORIGIN = var.cors_origin },
       each.key == "api" && var.search_function_arn != null ? { SEARCH_FUNCTION = var.search_function_arn } : {},
+      each.key == "api" && var.search_function_arn != null && var.semantic ? { SEMANTIC = "true" } : {},
       each.key == "api" && var.sending != null ? {
         DOMAIN              = var.sending.domain
         SEND_ALIASES        = join(",", var.sending.aliases)

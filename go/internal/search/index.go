@@ -30,6 +30,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
 	from_t, to_t, cc_t, bcc_t, subject, body, attachments,
 	content='', contentless_delete=1,
 	tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TABLE IF NOT EXISTS docs_vec(
+	id INTEGER PRIMARY KEY,
+	vec BLOB NOT NULL
 );`
 
 // Field names the JMAP filter conditions map to.
@@ -193,6 +197,9 @@ func (x *Index) remove(emailID string) error {
 		return err
 	}
 	if err := x.exec(`DELETE FROM docs_fts WHERE rowid = ?`, rowid); err != nil {
+		return err
+	}
+	if err := x.exec(`DELETE FROM docs_vec WHERE id = ?`, rowid); err != nil {
 		return err
 	}
 	return x.exec(`DELETE FROM docs WHERE id = ?`, rowid)

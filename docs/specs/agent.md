@@ -4,7 +4,7 @@
 
 ## Scope and status
 
-**Status: A0–A3 and the A4 agent tools are implemented, ahead of the Phase 3 cutover at the owner's request ([roadmap](../roadmap.md#agent-phases)):** the Python package, image and tests in `agent/`, the trigger Lambda and `agent` CLI in `go/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). A0 is deployed; A1 is deployed with the A2/A3 code in the same image, but the agent's client holds only `mail.read`, so every write mode stops with `scope_not_granted`. The A4 tools are off, and the server side of semantic search is not built yet. No gate below has passed in full; the checked items record their evidence. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
+**Status: A0–A3 and the A4 agent tools are implemented, ahead of the Phase 3 cutover at the owner's request ([roadmap](../roadmap.md#agent-phases)):** the Python package, image and tests in `agent/`, the trigger Lambda and `agent` CLI in `go/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). A0 is deployed; A1 is deployed with the A2/A3 code in the same image, but the agent's client holds only `mail.read`, so every write mode stops with `scope_not_granted`. The A4 tools are off; the server side of semantic search is built and tested but not deployed (`embedding_model` unset). No gate below has passed in full; the checked items record their evidence. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
 
 ## Required behavior and invariants
 
@@ -137,7 +137,7 @@ Each phase adds one class of side effect and the scope it needs, granted only af
 | Approved organising | Flag, move and archive, run only after approval | A3 | `mail.write` |
 | Approved send | Sends a reviewed draft once per approval | A3 | `mail.submit` + `mail.write` |
 | Reply reminders | Threads waiting on the owner, nudged in the digest | A3 | `mail.read` |
-| Semantic and hybrid search | `docs_vec` in the [search index](search.md#index-schema-sketch), exposed as a custom JMAP capability | A4 | `mail.read` |
+| Semantic search | `docs_vec` in the [search index](search.md#semantic-search), exposed as the custom [`SemanticEmail/query`](jmap.md#semantic-search) method | A4 | `mail.read` |
 | Attachment text | Text from PDF and office attachments within size caps | A4 | `mail.read` |
 | MCP tool server | The JMAP tools behind AgentCore Gateway with Cedar policy (deferred) | A4 | per tool |
 | Webmail chat | Chat panel in the Phase 4 webmail (deferred to Phase 4) | A4 | per feature |
@@ -308,7 +308,7 @@ Offline, 24 approval scenarios against the stateful fake server (`agent/tests/te
 
 - [ ] Each A4 feature ships with its own evaluation set and gate before release.
 
-Attachment extraction has offline tests for the size, page, decompression and text caps (`agent/tests/test_attachments.py`); no evaluation set exists for either tool yet, so both stay off.
+Attachment extraction has offline tests for the size, page, decompression and text caps (`agent/tests/test_attachments.py`); semantic search has offline Go tests for vectors, the reader and the JMAP method ([search checks](search.md#acceptance-checks)). No evaluation set exists for either tool yet, so both stay off, and `embedding_model` stays unset until the semantic evaluation is ready ([semantic search deployment](../operations/deployment.md#semantic-search)).
 
 ## Open questions
 

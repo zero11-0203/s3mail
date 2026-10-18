@@ -18,6 +18,10 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:s3:::s3mail-index-x", id = "s3mail-index-x" }
   }
 
+  mock_resource "aws_secretsmanager_secret" {
+    defaults = { arn = "arn:aws:secretsmanager:us-east-1:111111111111:secret:s3mail/embeddings-api-key-x" }
+  }
+
   mock_resource "aws_sqs_queue" {
     defaults = { arn = "arn:aws:sqs:us-east-1:111111111111:s3mail-index", url = "https://sqs.us-east-1.amazonaws.com/111111111111/s3mail-index" }
   }
@@ -35,6 +39,11 @@ variables {
 
 run "least_privilege" {
   command = apply
+
+  assert {
+    condition     = length(aws_secretsmanager_secret.embed_key) == 0 && alltrue([for f in aws_lambda_function.fn : !contains(keys(f.environment[0].variables), "EMBED_MODEL")]) && !output.semantic
+    error_message = "semantic search is off by default"
+  }
 
   assert {
     condition     = aws_lambda_function.fn["indexer"].reserved_concurrent_executions == 1
@@ -91,5 +100,37 @@ run "least_privilege" {
       one(one(aws_s3_bucket_lifecycle_configuration.index.rule).noncurrent_version_expiration).newer_noncurrent_versions == 3
     )
     error_message = "old generations expire after a day, keeping three"
+  }
+}
+
+run "semantic_reads_only_its_key" {
+  command = apply
+
+  variables {
+    embedding_model = "openai/text-embedding-3-small"
+  }
+
+  assert {
+    condition = alltrue([for f in aws_lambda_function.fn :
+      f.environment[0].variables["EMBED_MODEL"] == var.embedding_model &&
+      f.environment[0].variables["EMBED_KEY_SECRET"] == aws_secretsmanager_secret.embed_key[0].arn
+    ]) && output.semantic
+    error_message = "both functions embed with the model and its key"
+  }
+
+  assert {
+    condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
+      for st in jsondecode(p.policy).Statement : st.Resource == aws_secretsmanager_secret.embed_key[0].arn
+      if anytrue([for a in flatten([st.Action]) : startswith(a, "secretsmanager:")])
+    ]) && anytrue([for st in jsondecode(p.policy).Statement : st.Action == "secretsmanager:GetSecretValue"])])
+    error_message = "each role reads only the embeddings key"
+  }
+
+  assert {
+    condition = alltrue([for k in ["search"] : alltrue([
+      for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement :
+      !anytrue([for r in flatten([st.Resource]) : startswith(r, var.originals_bucket_arn)])
+    ])])
+    error_message = "the search function still reads no mail content"
   }
 }

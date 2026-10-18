@@ -94,6 +94,15 @@ The permission inventory must implement these component boundaries; a service li
 
 **Shared-table limitation:** the initial mail table places typed records under one account partition ([storage model](storage-sync.md#design)). Table/action permissions and supported `dynamodb:LeadingKeys` conditions constrain partition access, not record types by sort-key prefix. Do not claim that IAM isolates ingestion/dispatcher writes from every other record in that same partition. Grant only needed item actions, enforce the transaction invariants in code and record this trusted-backend boundary. A component needing an independently enforced record boundary must use a separate table/partition with compatible conditions. See [DynamoDB fine-grained conditions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html).
 
+### Data leaving AWS
+
+Mail content stays in this AWS account except through two optional, owner-enabled paths, both through OpenRouter with provider data collection denied on every request and the key in an owner-set secret:
+
+- the [mail agent](agent.md#architecture)'s model calls, which carry mail excerpts;
+- [semantic search](search.md#semantic-search) embeddings (`embedding_model`), which carry each indexed Email's subject and the start of its body, and the query text.
+
+Both stay off unless configured; core mail, keyword search and the clients never depend on them. Telemetry carries no mail content on either path.
+
 ### CI identity
 
 GitHub Actions authenticates to AWS with **OpenID Connect**: each job exchanges a short-lived GitHub-issued token for temporary AWS credentials. No AWS access keys exist in GitHub. The OIDC provider, all CI roles and their policies/boundary are created by `bootstrap`; main deployment roles cannot change them.

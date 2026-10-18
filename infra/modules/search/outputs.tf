@@ -22,3 +22,13 @@ output "index_queue_url" {
 output "function_names" {
   value = { for k, f in aws_lambda_function.fn : k => f.function_name }
 }
+
+output "semantic" {
+  description = "Whether the search functions embed (semantic search on)."
+  value       = local.semantic
+}
+
+output "embedding_key_secret" {
+  description = "The owner-set embeddings key secret, or null."
+  value       = local.semantic ? aws_secretsmanager_secret.embed_key[0].name : null
+}

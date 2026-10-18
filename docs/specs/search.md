@@ -15,13 +15,13 @@
 
 ## Design
 
-DynamoDB has no full-text search, so search uses a separate, rebuildable index: **one SQLite database file stored in S3** with **FTS5** (keyword search with BM25 ranking). DynamoDB and S3 remain the source of truth; the index can always be regenerated from them. The [mail agent](agent.md) (phase A4) later adds **sqlite-vec** vectors to the same file for semantic and hybrid search; the storage choice below accounts for that.
+DynamoDB has no full-text search, so search uses a separate, rebuildable index: **one SQLite database file stored in S3** with **FTS5** (keyword search with BM25 ranking). DynamoDB and S3 remain the source of truth; the index can always be regenerated from them. Optional [semantic search](#semantic-search) for the [mail agent](agent.md) (phase A4) keeps embedding vectors in the same file; the storage choice below accounts for that.
 
 ### Why SQLite on S3
 
 | Option | Keyword | Semantic | Metadata filters | Cost / operations | Decision |
 | --- | --- | --- | --- | --- | --- |
-| **SQLite (FTS5, later sqlite-vec) on S3** | Yes (BM25) | Later (exact k-NN) | Full SQL | No VPC; whole-file storage/transfer and reader refreshes must be budgeted | **Chosen**, subject to scale benchmark |
+| **SQLite (FTS5, plus a vector table) on S3** | Yes (BM25) | Optional (exact k-NN) | Full SQL | No VPC; whole-file storage/transfer and reader refreshes must be budgeted | **Chosen**, subject to scale benchmark |
 | S3 Vectors | No | Yes (approximate) | Yes | Managed; price by actual storage/query workload | Rejected: no keyword search, so JMAP `text` filter would need a second system |
 | Aurora PostgreSQL Serverless v2 (pgvector + full-text) | Yes | Yes | Full SQL | Managed database/VPC; validate engine auto-pause support, storage/I/O floor and resume latency | Fallback after measurement |
 | OpenSearch Service | Yes (native hybrid) | Yes | Yes | Managed cluster/capacity floor; benchmark cost | Rejected initially for operational/cost scope |
@@ -61,7 +61,7 @@ flowchart LR
 - `docs`: email id, thread id, account id, sender, recipients, subject, received date, mailbox ids, `deliveredTo` alias, has-attachment flag, language.
 - `docs_fts` (FTS5, `tokenize = "unicode61 remove_diacritics 2"`): separate From, To, Cc, Bcc, Subject and body columns, including address display names and address strings. Keep exact normalized address/header projections in `docs` for required field-specific matching and punctuation-sensitive queries; body indexing uses visible text rather than HTML tag/attribute names.
 - `meta`: generation ID, source sequence, restore epoch and schema/parser version; the source cursor travels with the database, not just its ETag.
-- Room for a `docs_vec` table keyed by email id, added for the [mail agent](agent.md) in A4; the indexer's batch-and-conditional-`PUT` cycle is the single place where it will be written.
+- `docs_vec(id, vec)`: one unit-length float32 embedding per indexed Email, keyed by the `docs` row, with the embedding model in `meta` ([semantic search](#semantic-search)). The indexer's batch-and-conditional-`PUT` cycle is the single place it is written.
 
 ### Multilingual text
 
@@ -78,7 +78,16 @@ Mail arrives in many languages and character sets.
 - Standard `Email/query` text/address/subject/body filters combine field-scoped FTS5 and exact normalized header/address matching. `text` covers From, To, Cc, Bcc and Subject as well as visible body text. Support AND/OR/NOT combinations and declared sort semantics, not an implicit BM25-only order.
 - Text-filtered queries report `canCalculateChanges: false`; their `queryState` still incorporates the actual index generation, restore epoch, normalized filter/sort and the live metadata revision used for final filtering. Different results cannot share a state token. Expired generation states require a fresh query; offset/anchor behavior is tested across refreshes.
 - `SearchSnippet/get` returns RFC-defined highlighted strings with message text escaped and only the specified highlight markers inserted; authorization/destruction checks precede extraction. Clients still render snippets as untrusted data.
-- Semantic and hybrid search will be a custom JMAP capability added for the [mail agent](agent.md) in A4.
+- Semantic search is the custom `SemanticEmail/query` method ([JMAP](jmap.md#semantic-search)), advertised only when it is configured ([semantic search](#semantic-search)). Hybrid ranking is not offered; a client combines the two queries itself.
+
+### Semantic search
+
+Optional and off by default (the `embedding_model` variable of `infra/main`); keyword search never depends on it.
+
+- **Embedding:** the indexer embeds each new Email's subject and the first 2,000 characters of its visible body through OpenRouter's embeddings API (suggested model `openai/text-embedding-3-small`), in batches of 32 with provider data collection denied. The search function embeds the query text (1–1,000 characters) the same way. Both read the owner-set `{"api_key": ...}` secret `s3mail/embeddings-api-key`. **When on, indexed mail text leaves AWS** for the provider; see the [security data boundary](security.md#data-leaving-aws).
+- **Best effort, rebuildable:** vectors are added after the keyword replay, newest Emails first, at most 512 per publication. An embedding failure or a missing key is logged and the keyword generation still publishes; Emails without vectors are retried on later publications, so existing mail is backfilled as new mail arrives (or at once by a full rebuild). Changing the model clears every vector, because vectors from different models cannot be compared. Destroyed Emails lose their vector with their `docs` row.
+- **Query:** an exact cosine scan over `docs_vec` in the verified generation, returning up to 64 Email ids by score. No approximate index or sqlite-vec extension is needed at personal-mailbox size. The JMAP method then drops ids that are no longer live, as with text conditions.
+- **Unavailable:** without a configured embedder the search function answers `semanticUnavailable`, which the API reports as `serverUnavailable`; the capability is not advertised unless the API is told the search function embeds.
 
 ### Current implementation
 
@@ -89,6 +98,7 @@ What is deployed (`go/internal/search`, `infra/modules/search`) and where it is 
 - **Field matching:** `text`, `body`, `bcc` and `hasAttachment` use the index. `from`, `to`, `cc` and `subject` use case-insensitive substring matching on the live header projection.
 - **CJK segmentation:** NFKC, case folding and overlapping CJK character bigrams only. Dictionary segmentation (`gse`, `kagome`) and language detection are deferred to keep the Lambda package small; bigram phrase queries already match any CJK word of two or more characters, at some precision cost.
 - **History gaps:** the daily collector never moves the history floor past the registered generation's source sequence, so the indexer and readers never meet a gap and the rebuild-on-gap path is not implemented; a restore-epoch change or an unusable snapshot triggers a full rebuild from live Emails.
+- **Semantic search:** implemented and tested offline (`go/internal/search/vectors.go`, `embed.go`, `go/internal/jmap/semantic.go`), not deployed; no embedding quality evaluation has run.
 - **Deletion purge:** destroyed Emails leave the next generation. When an Email destroyed within the last eight days is covered by the registered generation, the daily collector (`go/internal/gc`) deletes every older version of the index object, including the three the lifecycle rule protects; the registered and newer versions stay. A search reader removes its previous local copy when it swaps generations.
 
 ## Failure handling
@@ -101,4 +111,5 @@ A failed CAS discards speculative work and replays from the winner. A publicatio
 - Replay all mutation sources (create/import/copy/send hooks/move/keywords/destroy) through the outbox; crash at every commit/dispatch/publication boundary and reorder/duplicate wake-ups. Prove cursor continuity and no lost dirty IDs, including deletion before index consumption.
 - Single-writer/CAS race, coherent SQLite backup with uncheckpointed WAL, publication-registration crash, atomic reader swap and two warm readers on different generations. Live deletion checks prevent snippets/downloads for destroyed mail; all From/To/Cc/Bcc/Subject fields match independently of the body. Different result sets have different query states.
 - Benchmark 50,000 synthetic messages, burst publications and multiple readers. Check six-minute lag, cold/warm latency, scratch-space peaks and one-day/three-previous lifecycle eligibility; recent versions remain until age-qualified. Test content purging of all older index versions within the deletion deadline.
+- **Semantic search:** vectors follow creates, destroys and model changes; an embedding failure still publishes the keyword index and is backfilled later; the method is neither advertised nor accepted while off, returns only live Emails and enforces its limits; the roles read only the embeddings key and the search function still reads no mail content. Before the agent's `semantic` tool is enabled, its [A4 evaluation](agent.md#evaluation) passes against the deployed index.
 - **Keyword relevance tests:** a versioned set of query → expected-message pairs in each supported language over a synthetic mailbox, run locally and on every CI run (no external services needed), tracking recall@10 against a baseline.

@@ -10,6 +10,20 @@ locals {
   index_objects = "${aws_s3_bucket.index.arn}/index/*"
   index_timeout = 900
 
+  # Optional semantic vectors (docs/specs/search.md#semantic-search): with a
+  # model set, both functions call the embeddings API with the owner-set key.
+  semantic = var.embedding_model != null
+  embed_env = local.semantic ? {
+    EMBED_MODEL      = var.embedding_model
+    EMBED_KEY_SECRET = aws_secretsmanager_secret.embed_key[0].arn
+  } : {}
+  embed_statements = local.semantic ? [{
+    Sid      = "ReadEmbeddingKey"
+    Effect   = "Allow"
+    Action   = "secretsmanager:GetSecretValue"
+    Resource = aws_secretsmanager_secret.embed_key[0].arn
+  }] : []
+
   functions = {
     # The only index writer. A registration is a guarded commit: it
     # updates STATE and writes SEARCH and one CHANGE record; it never
@@ -20,8 +34,8 @@ locals {
       timeout     = local.index_timeout
       storage     = 4096
       concurrency = 1
-      env         = { INDEX_BUCKET = aws_s3_bucket.index.id }
-      statements = [
+      env         = merge({ INDEX_BUCKET = aws_s3_bucket.index.id }, local.embed_env)
+      statements = concat([
         {
           Sid       = "ReadAndRegisterOwnAccountPartition"
           Effect    = "Allow"
@@ -55,7 +69,7 @@ locals {
           Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
           Resource = aws_sqs_queue.index.arn
         },
-      ]
+      ], local.embed_statements)
     }
     # Reads the registration and exact registered index versions; it has
     # no mail-content or write grant.
@@ -65,8 +79,8 @@ locals {
       timeout     = 30
       storage     = 2048
       concurrency = null
-      env         = { INDEX_BUCKET = aws_s3_bucket.index.id }
-      statements = [
+      env         = merge({ INDEX_BUCKET = aws_s3_bucket.index.id }, local.embed_env)
+      statements = concat([
         {
           Sid       = "ReadOwnAccountPartition"
           Effect    = "Allow"
@@ -80,7 +94,7 @@ locals {
           Action   = "s3:GetObjectVersion"
           Resource = local.index_objects
         },
-      ]
+      ], local.embed_statements)
     }
   }
 
@@ -181,6 +195,19 @@ resource "aws_lambda_alias" "live" {
   name             = "live"
   function_name    = aws_lambda_function.fn[each.key].function_name
   function_version = aws_lambda_function.fn[each.key].version
+}
+
+# --- Embeddings key ----------------------------------------------------------
+
+# Holds {"api_key": "..."} for the embeddings API (OpenRouter), set by the
+# owner out of band (docs/operations/deployment.md#semantic-search), so no
+# secret is in state. Only with an embedding model.
+resource "aws_secretsmanager_secret" "embed_key" {
+  count = local.semantic ? 1 : 0
+
+  name                    = "${var.name}/embeddings-api-key"
+  description             = "Embeddings API key (OpenRouter) for semantic search, set by the owner"
+  recovery_window_in_days = 7
 }
 
 # --- Wake-ups ----------------------------------------------------------------

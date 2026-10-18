@@ -32,7 +32,7 @@ Incoming mail is durably parsed and committed with state/history/outbox work. JM
 
 Original mail lives in a dedicated versioned S3 bucket whose relevant roles have no delete permissions. Deleting an Email removes active mailbox/search access while retaining its original; disposable uploads and derived data live separately. The [retention policy](operations/recovery.md#original-mail-retention) defines the boundary. No additional backups or DynamoDB PITR are configured for the current personal-use scope; loss of mailbox metadata may be permanent.
 
-A single indexer publishes coherent SQLite FTS5 snapshots in S3; a separate search Lambda reads registered versions. Search is rebuildable and does not determine mailbox listing or synchronization correctness. Shared authorization covers all public JMAP routes, including streamed downloads and EventSource. The later webmail uses a separate gateway and its own browser session/login handling.
+A single indexer publishes coherent SQLite FTS5 snapshots in S3; a separate search Lambda reads registered versions. Search is rebuildable and does not determine mailbox listing or synchronization correctness. Optional [semantic search](specs/search.md#semantic-search) adds embeddings from OpenRouter to the same snapshots; it is off by default. Shared authorization covers all public JMAP routes, including streamed downloads and EventSource. The later webmail uses a separate gateway and its own browser session/login handling.
 
 ## Component responsibilities
 
