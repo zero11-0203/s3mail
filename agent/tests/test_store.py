@@ -48,16 +48,35 @@ async def test_the_cursor_is_written_only_over_the_value_read() -> None:
         {
             "TableName": TABLE,
             "Item": item,
-            "ConditionExpression": "#a = :at AND #s = :s",
-            "ExpressionAttributeNames": {"#a": "at", "#s": "state"},
+            "ConditionExpression": "#a = :at AND #s = :s AND attribute_not_exists(#i)",
+            "ExpressionAttributeNames": {"#a": "at", "#s": "state", "#i": "after_id"},
             "ExpressionAttributeValues": {":at": {"S": "t1"}, ":s": {"S": "s1"}},
         },
     )
     stub.add_client_error("put_item", "ConditionalCheckFailedException")
     with stub:
-        # A truncated query fallback stores no state.
         assert await t.set_cursor(Cursor(None, "t2"), Cursor("s1", "t1"))
         assert not await t.set_cursor(Cursor(None, "t3"), Cursor(None, "t2"))
+
+
+async def test_the_cursor_condition_includes_the_resumed_email() -> None:
+    # Runs resuming after different emails of one second must not overwrite
+    # each other.
+    t, stub = table()
+    item: dict[str, Any] = {**CURSOR_KEY, "at": {"S": "t1"}, "after_id": {"S": "M600"}}
+    stub.add_response(
+        "put_item",
+        {},
+        {
+            "TableName": TABLE,
+            "Item": item,
+            "ConditionExpression": "#a = :at AND attribute_not_exists(#s) AND #i = :i",
+            "ExpressionAttributeNames": {"#a": "at", "#s": "state", "#i": "after_id"},
+            "ExpressionAttributeValues": {":at": {"S": "t1"}, ":i": {"S": "M300"}},
+        },
+    )
+    with stub:
+        assert await t.set_cursor(Cursor(None, "t1", "M600"), Cursor(None, "t1", "M300"))
 
 
 async def test_a_cursor_without_state_reads_back() -> None:

@@ -620,13 +620,68 @@ func invalidProps(desc string, props ...string) *SetError {
 
 var errBusy = &SetError{Type: "serverFail", Description: "account busy; retry"}
 
+// errStateMoved refuses an object of a call whose ifInState no longer
+// holds: another writer changed the type after the call's earlier objects
+// were applied.
+var errStateMoved = &SetError{Type: "stateMismatch", Description: "the state changed during this call; its earlier objects were applied"}
+
+// stateGuard holds a /set or Email/import call to its ifInState
+// (docs/specs/storage-sync.md#dynamodb-storage-and-consistency-contract).
+// Objects commit one at a time, so every commit made for the call must
+// still find the type unchanged since the client's state, apart from the
+// call's own earlier commits. Commits are conditional on the account
+// sequence: a competing change either shows in the fresh state read or
+// makes the commit retry into that read.
+type stateGuard struct {
+	typ   string
+	seq   int64 // the type's last change the call accepts
+	wrote bool  // a commit for the call succeeded
+	moved bool  // the type changed under the call
+}
+
+type guardKey struct{}
+
+// guardState checks a call's ifInState against its start state and returns
+// the context its commits run under. Without a token it clears the guard
+// of an enclosing call, such as a submission's for its success hooks.
+func guardState(ctx context.Context, tok *string, start State, typ string) (context.Context, *stateGuard, *MethodError) {
+	if tok == nil {
+		return context.WithValue(ctx, guardKey{}, (*stateGuard)(nil)), nil, nil
+	}
+	if !inState(*tok, start, typ) {
+		return ctx, nil, methodErr("stateMismatch", "")
+	}
+	g := &stateGuard{typ: typ, seq: start.Of(typ)}
+	return context.WithValue(ctx, guardKey{}, g), g, nil
+}
+
+func guardOf(ctx context.Context) *stateGuard {
+	g, _ := ctx.Value(guardKey{}).(*stateGuard)
+	return g
+}
+
+// refused reports whether the call's later objects are refused unseen.
+func (g *stateGuard) refused() bool { return g != nil && g.moved }
+
+// aborted reports whether the call fails as a whole: the type changed
+// before any of its commits, so nothing was applied.
+func (g *stateGuard) aborted() bool { return g != nil && g.moved && !g.wrote }
+
 // commitLoop retries one per-object commit from a fresh read while other
-// commits win the sequence race.
+// commits win the sequence race, within the call's state guard.
 func (s *Server) commitLoop(ctx context.Context, attempt func(st State) (*model.Mutation, *SetError)) (State, *SetError) {
+	g := guardOf(ctx)
+	if g.refused() {
+		return State{}, errStateMoved
+	}
 	for range maxSetAttempts {
 		st, err := s.Store.State(ctx)
 		if err != nil {
 			return State{}, &SetError{Type: "serverFail"}
+		}
+		if g != nil && st.Of(g.typ) > g.seq {
+			g.moved = true
+			return State{}, errStateMoved
 		}
 		m, serr := attempt(st)
 		if serr != nil || m == nil {
@@ -645,6 +700,9 @@ func (s *Server) commitLoop(ctx context.Context, attempt func(st State) (*model.
 		if err != nil {
 			s.Log.Error("jmap", "outcome", "serverFail", "step", "commit", "error", err)
 			return State{}, &SetError{Type: "serverFail"}
+		}
+		if g != nil {
+			g.seq, g.wrote = next.Of(g.typ), true
 		}
 		return next, nil
 	}
@@ -781,8 +839,9 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 	if err != nil {
 		return nil, c.s.fail("read state", err)
 	}
-	if a.IfInState != nil && !inState(*a.IfInState, start, "Mailbox") {
-		return nil, methodErr("stateMismatch", "")
+	ctx, g, e := guardState(ctx, a.IfInState, start, "Mailbox")
+	if e != nil {
+		return nil, e
 	}
 	resp := newSetResponse(a.AccountID, stateToken(start, "Mailbox"))
 	last := start
@@ -951,6 +1010,9 @@ func mailboxSet(ctx context.Context, c *call) (any, *MethodError) {
 		}
 		advance(st)
 		resp.Destroyed = append(resp.Destroyed, id)
+	}
+	if g.aborted() {
+		return nil, methodErr("stateMismatch", "")
 	}
 	resp.NewState = stateToken(last, "Mailbox")
 	return resp, nil

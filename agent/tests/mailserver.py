@@ -11,6 +11,7 @@ Any destroy fails the test.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -80,6 +81,7 @@ class MailServer(FakeJmap):
         self.log: list[tuple[int, str]] = []  # (seq, created email id)
         self.writes: list[tuple[str, dict[str, Any]]] = []
         self.fail_write: str | None = None  # "transport" or a method error type
+        self.after_update: Callable[[str], None] | None = None  # after each email's commit
         self.submission = submission
         self.capabilities = {
             CORE: {"maxObjectsInGet": 50, "maxCallsInRequest": 16, "maxObjectsInSet": 16},
@@ -224,7 +226,16 @@ class MailServer(FakeJmap):
             }
             self.deliver(email)
             created[key] = {"id": id, "threadId": email["threadId"], "blobId": email["blobId"]}
+        # As in s3mail, each email commits on its own, and an ifInState
+        # holds every commit: once another writer moves the state, the
+        # emails not yet reached are refused one by one.
+        guarded = args.get("ifInState") is not None
+        accepted = self.seq
+        refused: dict[str, Any] = {}
         for id, patch in (args.get("update") or {}).items():
+            if guarded and self.seq > accepted:
+                refused[id] = {"type": "stateMismatch"}
+                continue
             target = self.by_id(id)
             assert target is not None, id
             for path, value in patch.items():
@@ -236,9 +247,16 @@ class MailServer(FakeJmap):
                     target[field][key] = value
             assert target["mailboxIds"], "an email keeps at least one mailbox"
             updated[id] = None
-        if updated:
             self.touch()
-        return {"created": created or None, "updated": updated or None, "newState": f"s{self.seq}"}
+            accepted = self.seq
+            if self.after_update:
+                self.after_update(id)
+        return {
+            "created": created or None,
+            "updated": updated or None,
+            "notUpdated": refused or None,
+            "newState": f"s{accepted}",  # the call's own last commit
+        }
 
     def _submission_set(self, args: dict[str, Any]) -> Any:
         created = {}

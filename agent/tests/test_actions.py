@@ -465,3 +465,46 @@ async def test_unrelated_new_mail_during_an_update_is_retried(
     result = await rig.approve(approval["hash"])
     assert result["outcome"]["outcome"] == "done"
     assert rig.server.by_id("M1")["mailboxIds"] == {"archive": True}
+
+
+def after_first_email(server: MailServer, change: Any) -> None:
+    """Run change once, after the first email of a write was committed."""
+    pending = [change]
+
+    def hook(_: str) -> None:
+        if pending:
+            pending.pop()()
+
+    server.after_update = hook
+
+
+# 30
+async def test_new_mail_after_part_of_a_batch_retries_only_the_rest(
+    scripted: ScriptFactory,
+) -> None:
+    rig = Rig(server(), scripted, *search_then(ARCHIVE))
+    approval = (await rig.act())["approval"]
+    arrival = message("M9", "T9", "a@example.com", "New", "2026-10-17T12:00:00Z", "n")
+    after_first_email(rig.server, lambda: rig.server.deliver(arrival))
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"] == {"outcome": "done", "updated": ["M1", "M2"], "failed": []}
+    sets = [a for n, a in rig.server.writes if n == "Email/set"]
+    assert [list(a["update"]) for a in sets] == [["M1", "M2"], ["M2"]]
+    for id in ("M1", "M2"):
+        assert rig.server.by_id(id)["mailboxIds"] == {"archive": True}
+
+
+# 31
+async def test_an_owner_change_after_part_of_a_batch_stops_it(scripted: ScriptFactory) -> None:
+    rig = Rig(server(), scripted, *search_then(ARCHIVE))
+    approval = (await rig.act())["approval"]
+
+    def owner_trashes() -> None:
+        rig.server.by_id("M2")["mailboxIds"] = {"trash": True}
+        rig.server.touch()
+
+    after_first_email(rig.server, owner_trashes)
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"] == {"outcome": "mail_changed", "updated": ["M1"], "failed": []}
+    assert rig.server.by_id("M1")["mailboxIds"] == {"archive": True}
+    assert rig.server.by_id("M2")["mailboxIds"] == {"trash": True} and updates(rig.server) == 1

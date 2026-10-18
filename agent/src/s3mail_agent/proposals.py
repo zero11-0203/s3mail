@@ -8,7 +8,8 @@ an approval carrying that hash, within 24 hours, at most once.
   found in this run. Never into Trash, Drafts or Sent, never a destroy. It
   runs only if those emails still have the keywords and mailboxes they had
   when proposed, checked at an Email state that each write requires with
-  ifInState, so a change in between fails the write instead of mixing.
+  ifInState, so a change in between fails the write, or refuses the emails
+  it had not reached, instead of mixing.
 - propose_send: one existing draft, solely in Drafts with $draft, from one
   of the owner's identities.
 
@@ -298,13 +299,12 @@ async def _execute_update(
     updated: list[str] = []
     failed: list[str] = []
     for name, args in proposal["calls"]:
-        batch = list(args["update"])
+        pending: dict[str, Any] = dict(args["update"])
         for attempt in range(STATE_ATTEMPTS):
             # Applied only in the state that was checked: a change made in
-            # between fails the write without applying it.
+            # between refuses the write, or the emails it had not reached.
             try:
-                out = await jmap.write(name, {**args, "ifInState": state})
-                break
+                out = await jmap.write(name, {**args, "update": pending, "ifInState": state})
             except JmapUnknownResult:
                 return {"outcome": "unknown", "updated": updated, "failed": failed}
             except JmapMethodError as exc:
@@ -315,13 +315,28 @@ async def _execute_update(
                         "updated": updated,
                         "failed": failed,
                     }
-            # The account changed, such as by new mail: check this batch again.
-            state = await _unchanged(jmap, batch, proposal["before"])
+            else:
+                result = out["c0"]
+                updated.extend((result.get("updated") or {}).keys())
+                refused = result.get("notUpdated") or {}
+                moved = [i for i, e in refused.items() if e.get("type") == "stateMismatch"]
+                failed.extend(i for i in refused if i not in moved)
+                state = result["newState"]
+                if not moved:
+                    break
+                if attempt == STATE_ATTEMPTS - 1:
+                    return {
+                        "outcome": "failed",
+                        "error": "stateMismatch",
+                        "updated": updated,
+                        "failed": failed,
+                    }
+                pending = {i: pending[i] for i in moved}
+            # The account changed, such as by new mail: check what is left
+            # of this batch again.
+            state = await _unchanged(jmap, list(pending), proposal["before"])
             if state is None:
                 return {"outcome": "mail_changed", "updated": updated, "failed": failed}
-        updated.extend((out["c0"].get("updated") or {}).keys())
-        failed.extend((out["c0"].get("notUpdated") or {}).keys())
-        state = out["c0"]["newState"]
     return {"outcome": "done" if not failed else "partial", "updated": updated, "failed": failed}
 
 

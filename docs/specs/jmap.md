@@ -68,7 +68,7 @@ Clients learn about changes by polling `*/changes` or through push. Polling must
 
 ## Failure handling
 
-Use the RFC-defined request, method and per-object errors. Expired/foreign states require full resynchronization under the [storage contract](storage-sync.md). Push closes at token expiry or disable; reconnect requires valid credentials. Optional transports and unproven capabilities remain unadvertised.
+Use the RFC-defined request, method and per-object errors; a set whose `ifInState` stops holding after some objects were applied refuses the rest with a per-object `stateMismatch` ([set semantics](storage-sync.md#dynamodb-storage-and-consistency-contract)). Expired/foreign states require full resynchronization under the [storage contract](storage-sync.md). Push closes at token expiry or disable; reconnect requires valid credentials. Optional transports and unproven capabilities remain unadvertised.
 
 ## Acceptance checks
 

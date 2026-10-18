@@ -338,8 +338,9 @@ func submissionSet(ctx context.Context, c *call) (any, *MethodError) {
 	if e != nil {
 		return nil, e
 	}
-	if a.IfInState != nil && !inState(*a.IfInState, start, "EmailSubmission") {
-		return nil, methodErr("stateMismatch", "")
+	ctx, g, e := guardState(ctx, a.IfInState, start, "EmailSubmission")
+	if e != nil {
+		return nil, e
 	}
 	resp := newSetResponse(a.AccountID, stateToken(start, "EmailSubmission"))
 	last := start
@@ -390,6 +391,9 @@ func submissionSet(ctx context.Context, c *call) (any, *MethodError) {
 		advance(st)
 		succeeded[id] = x.EmailID
 		resp.Destroyed = append(resp.Destroyed, id)
+	}
+	if g.aborted() {
+		return nil, methodErr("stateMismatch", "")
 	}
 	resp.NewState = stateToken(last, "EmailSubmission")
 	c.successHooks(ctx, a, succeeded)

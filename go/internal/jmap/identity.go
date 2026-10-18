@@ -161,8 +161,9 @@ func identitySet(ctx context.Context, c *call) (any, *MethodError) {
 	if e != nil {
 		return nil, e
 	}
-	if a.IfInState != nil && !inState(*a.IfInState, start, "Identity") {
-		return nil, methodErr("stateMismatch", "")
+	ctx, g, e := guardState(ctx, a.IfInState, start, "Identity")
+	if e != nil {
+		return nil, e
 	}
 	resp := newSetResponse(a.AccountID, stateToken(start, "Identity"))
 	last := start
@@ -199,6 +200,9 @@ func identitySet(ctx context.Context, c *call) (any, *MethodError) {
 	}
 	for _, rawID := range a.Destroy {
 		resp.NotDestroyed[rawID] = &SetError{Type: "forbidden", Description: "identities follow the declared aliases; remove the alias to remove one"}
+	}
+	if g.aborted() {
+		return nil, methodErr("stateMismatch", "")
 	}
 	resp.NewState = stateToken(last, "Identity")
 	return resp, nil

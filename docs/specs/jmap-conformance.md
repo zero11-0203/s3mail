@@ -14,6 +14,7 @@
 | Mail limits | `maxMailboxesPerEmail` 8; `maxMailboxDepth` 10; `maxSizeMailboxName` 255 UTF-8 octets; `maxSizeAttachmentsPerEmail` 20 MiB; `mayCreateTopLevelMailbox` true |
 | Account id | `A` + base32 of a hash of the internal account and restore epoch: a restored account gets a new id (RFC 8620 §1.6.2) |
 | State tokens | `<epoch>-<seq>`, where `seq` is the last commit that changed the type (STATE `emailState`, `mailboxState`, `threadState`, `identityState`, `submissionState`, and `deliveryState` for the push-only `EmailDelivery` type, which advances only when a commit adds an Email by delivery, import or creation); `/changes` pages end at commit boundaries; a foreign epoch or future sequence is `cannotCalculateChanges` |
+| `ifInState` | Holds for every commit of a `/set` or `Email/import` call, apart from the call's own commits ([set semantics](storage-sync.md#dynamodb-storage-and-consistency-contract)): a change to the type before the first commit is the method-level `stateMismatch`; after some objects were applied, each remaining object is refused with a per-object `stateMismatch` (`TestIfInState*`, `TestMailboxIfInStateHoldsUntilTheFirstCommit` in `guard_test.go`) |
 | Query states | `q<epoch>-<seq>-<hash>`, where the hash covers the normalized filter, sort and query options; another query's state is `cannotCalculateChanges` |
 | `uploadUrl` | `POST /upload/{accountId}`; see [blobs](#blobs-and-push) |
 

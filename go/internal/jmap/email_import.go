@@ -42,6 +42,9 @@ func (s *Server) createFromRaw(ctx context.Context, n newEmail) (EmailMeta, Stat
 	if err != nil || len(mailparse.Parse(prefix).Headers) == 0 {
 		return EmailMeta{}, State{}, &SetError{Type: "invalidEmail", Description: "not an RFC 5322 message"}
 	}
+	if guardOf(ctx).refused() {
+		return EmailMeta{}, State{}, errStateMoved // archive nothing for a refused object
+	}
 	id := model.NewID("M")
 	kind := "imported"
 	if n.source == model.SourceComposed {
@@ -152,8 +155,9 @@ func emailImport(ctx context.Context, c *call) (any, *MethodError) {
 	if err != nil {
 		return nil, c.s.fail("read state", err)
 	}
-	if a.IfInState != nil && !inState(*a.IfInState, start, "Email") {
-		return nil, methodErr("stateMismatch", "")
+	ctx, g, e := guardState(ctx, a.IfInState, start, "Email")
+	if e != nil {
+		return nil, e
 	}
 	resp := importResponse{AccountID: a.AccountID, OldState: stateToken(start, "Email"), Created: nullMap[any]{}, NotCreated: setErrors{}}
 	last := start
@@ -168,6 +172,9 @@ func emailImport(ctx context.Context, c *call) (any, *MethodError) {
 		}
 		c.created[cid] = e.ID
 		resp.Created[cid] = createdEmail(e)
+	}
+	if g.aborted() {
+		return nil, methodErr("stateMismatch", "")
 	}
 	resp.NewState = stateToken(last, "Email")
 	return resp, nil

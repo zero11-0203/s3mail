@@ -158,9 +158,10 @@ async def test_a_truncated_query_fallback_continues_by_time(scripted: ScriptFact
     table.cursor = Cursor("expired-state", "2026-10-17T07:00:00Z")
     result = await run_digest(client(s), scripted(), table, now=NOW)
     assert "follows in the next digest" in result["digest"]
-    # The stored cursor covers only listed mail: the next digest queries on.
-    assert table.cursor is not None and table.cursor.state is None
-    assert table.cursor.at > "2026-10-17T07:00:00Z"
+    # The next digest queries on after the last listed email, from the state
+    # read before this page.
+    assert table.cursor is not None and table.cursor.after_id == "N295"
+    assert table.cursor.state == f"s{s.seq}" and table.cursor.at > "2026-10-17T07:00:00Z"
 
 
 @pytest.mark.parametrize("tied", [True, False])
@@ -183,6 +184,40 @@ async def test_a_truncated_query_fallback_lists_every_email_once(
     assert sorted(listed) == [f"N{i:03d}" for i in range(650)]
     # Once the backlog is listed, the cursor holds a full state again.
     assert table.cursor is not None and table.cursor.state is not None
+    assert table.cursor.after_id is None
+
+
+def bulk(text: str) -> list[str]:
+    return [
+        line.rsplit("[email:", 1)[1].rstrip("]")
+        for line in text.splitlines()
+        if line.startswith("- Bulk")
+    ]
+
+
+@pytest.mark.parametrize(
+    "late_at",
+    ["2026-10-17T12:00:00Z", "2026-10-17T13:00:00Z"],
+    ids=["earlier", "same-second"],
+)
+async def test_mail_landing_behind_a_continuing_query_is_listed(
+    scripted: ScriptFactory, late_at: str
+) -> None:
+    s, table = setup()
+    for i in range(650):
+        s.deliver(
+            message(
+                f"N{i:03d}", f"TN{i}", "b@example.org", f"Bulk {i}", "2026-10-17T13:00:00Z", "b"
+            )
+        )
+    table.cursor = Cursor("expired-state", "2026-10-17T07:00:00Z")
+    listed = bulk((await run_digest(client(s), scripted(), table, now=NOW))["digest"])
+    # Ingested late, it sorts before where the query resumes; L < N by id.
+    s.deliver(message("L1", "TL1", "b@example.org", "Bulk late", late_at, "b"))
+    for _ in range(3):
+        listed += bulk((await run_digest(client(s), scripted(), table, now=NOW))["digest"])
+    assert sorted(listed) == ["L1", *(f"N{i:03d}" for i in range(650))]
+    assert table.cursor is not None and table.cursor.after_id is None
 
 
 async def test_a_change_page_budget_bounds_the_work(

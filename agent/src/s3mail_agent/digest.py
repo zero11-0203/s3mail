@@ -11,7 +11,9 @@ left out. Ids are re-read with Email/get, so destroyed mail never appears.
 The cursor advances only after the digest was delivered, and only past what
 it listed: a capped window ends at the last change page it consumed, or at
 the last listed email of a capped query, and the next digest continues
-there. It is written only over the value this run read. A digest delivered
+there. A continuing query first lists the emails created since its last
+page that sort before where it resumes, such as mail ingested late. The
+cursor is written only over the value this run read. A digest delivered
 as mail is created under a lease on the window its cursor starts, carries a
 keyword naming that window, and records the cursor it covers before it is
 created: a retry finds the earlier email and advances only to that cursor,
@@ -82,35 +84,58 @@ class Window:
     state: str | None
     # The cursor time to store; None means the digest's own time.
     at: str | None = None
-    # The last listed email of a capped query, where the next one resumes.
+    # The last listed email of a capped query, where the next one resumes;
+    # state is then the Email state read before that query.
     after_id: str | None = None
+
+
+async def _created(jmap: JmapClient, since: str, limit: int) -> tuple[list[str], str, bool]:
+    """Ids created since a state, at most limit, the state that covers
+    exactly them, and whether that is every change."""
+    created: list[str] = []
+    for _ in range(MAX_CHANGE_PAGES):
+        # Never ask for more than still fits, so the returned state covers
+        # only listed changes.
+        room = min(CHANGES_PAGE, limit - len(created))
+        out = await jmap.call([("Email/changes", {"sinceState": since, "maxChanges": room})])
+        page = out["c0"]
+        created.extend(page.get("created", []))
+        since = page["newState"]
+        if not page.get("hasMoreChanges"):
+            return created, since, True
+        if len(created) >= limit:
+            break
+    return created, since, False
 
 
 async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Window:
     """Created email ids since the cursor, oldest first, and the state that
     covers exactly them."""
-    if cursor is not None and cursor.state is not None:
-        created: list[str] = []
-        since = cursor.state
+    if cursor is not None and cursor.state is not None and cursor.after_id is None:
         try:
-            for _ in range(MAX_CHANGE_PAGES):
-                # Never ask for more than still fits, so the returned state
-                # covers only listed changes.
-                room = min(CHANGES_PAGE, MAX_EMAILS - len(created))
-                out = await jmap.call(
-                    [("Email/changes", {"sinceState": since, "maxChanges": room})]
-                )
-                page = out["c0"]
-                created.extend(page.get("created", []))
-                since = page["newState"]
-                if not page.get("hasMoreChanges"):
-                    return Window(created, 0, since)
-                if len(created) >= MAX_EMAILS:
-                    break
-            return Window(created, None, since, cursor.at)
+            created, covered, complete = await _created(jmap, cursor.state, MAX_EMAILS)
         except JmapMethodError as exc:
             if exc.type not in ("cannotCalculateChanges", "invalidArguments"):
                 raise
+        else:
+            if complete:
+                return Window(created, 0, covered)
+            return Window(created, None, covered, cursor.at)
+    late: list[str] = []
+    since: str | None = None
+    if cursor is not None and cursor.after_id and cursor.state is not None:
+        # A capped query continues after its anchor, which mail arriving
+        # since its last page may sort before: list those emails now.
+        try:
+            late, since, complete = await _behind(jmap, cursor)
+        except JmapMethodError as exc:
+            if exc.type not in ("cannotCalculateChanges", "invalidArguments"):
+                raise
+            log.warning(json.dumps({"event": "digest_late_mail_unchecked"}))
+        else:
+            if not complete or len(late) >= MAX_EMAILS:
+                # The rest of those changes first; the query waits.
+                return Window(late, None, since, cursor.at, cursor.after_id)
     after = cursor.at if cursor is not None else _iso(now - FIRST_WINDOW)
     # A fresh query: received since the cursor time, in (receivedAt, id)
     # order, resuming after the last email a capped query listed. The state
@@ -118,10 +143,10 @@ async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Wi
     query: dict[str, Any] = {
         "filter": {"after": after},
         "sort": [{"property": "receivedAt", "isAscending": True}],
-        "limit": MAX_EMAILS,
+        "limit": MAX_EMAILS - len(late),
         "calculateTotal": True,
     }
-    if cursor is not None and cursor.state is None and cursor.after_id:
+    if cursor is not None and cursor.after_id:
         query |= {"anchor": cursor.after_id, "anchorOffset": 1}
     try:
         out = await jmap.call(
@@ -136,18 +161,38 @@ async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Wi
         out = await jmap.call(
             [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
         )
-    ids = out["c1"]["ids"]
-    total = int(out["c1"].get("total") or len(ids))
-    if not ids or int(out["c1"].get("position") or 0) + len(ids) >= total:
-        return Window(ids, 0, out["c0"]["state"])
-    # Truncated: the state covers unlisted mail, so the next digest resumes
-    # after the last listed email instead.
-    last = await _headers(jmap, ids[-1:], ["id", "receivedAt"])
+    # The state before this page: from the late-mail check when there was
+    # one, so nothing created after it goes unchecked.
+    state = since or out["c0"]["state"]
+    page = out["c1"]["ids"]
+    # Without its anchor the query can list late mail of the anchor's second.
+    seen = set(late)
+    ids = late + [i for i in page if i not in seen]
+    total = int(out["c1"].get("total") or len(page))
+    if not page or int(out["c1"].get("position") or 0) + len(page) >= total:
+        return Window(ids, 0, state)
+    # Truncated: the next digest resumes after the last listed email, first
+    # checking the mail created since this state.
+    last = await _headers(jmap, page[-1:], ["id", "receivedAt"])
     at = last[0].get("receivedAt") if last else None
     if not at:
         # Destroyed meanwhile: resume from the same time and anchor.
-        return Window(ids, None, None, after, cursor.after_id if cursor else None)
-    return Window(ids, None, None, at, ids[-1])
+        return Window(ids, None, state, after, cursor.after_id if cursor else None)
+    return Window(ids, None, state, at, page[-1])
+
+
+async def _behind(jmap: JmapClient, cursor: Cursor) -> tuple[list[str], str, bool]:
+    """Emails created since a capped query's last page that sort at or
+    before its anchor, which its continuation never reaches."""
+    assert cursor.state is not None and cursor.after_id is not None
+    created, since, complete = await _created(jmap, cursor.state, MAX_EMAILS)
+    anchor = (cursor.at, cursor.after_id)
+    late = [
+        e["id"]
+        for e in await _headers(jmap, created, ["id", "receivedAt"])
+        if (e.get("receivedAt") or "", e["id"]) <= anchor
+    ]
+    return late, since, complete
 
 
 async def _headers(jmap: JmapClient, ids: list[str], props: list[str]) -> list[dict[str, Any]]:

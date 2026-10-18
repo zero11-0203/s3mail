@@ -25,8 +25,9 @@ func emailSet(ctx context.Context, c *call) (any, *MethodError) {
 	if err != nil {
 		return nil, c.s.fail("read state", err)
 	}
-	if a.IfInState != nil && !inState(*a.IfInState, start, "Email") {
-		return nil, methodErr("stateMismatch", "")
+	ctx, g, e := guardState(ctx, a.IfInState, start, "Email")
+	if e != nil {
+		return nil, e
 	}
 	resp := newSetResponse(a.AccountID, stateToken(start, "Email"))
 	last := start
@@ -72,6 +73,9 @@ func emailSet(ctx context.Context, c *call) (any, *MethodError) {
 		}
 		advance(st)
 		resp.Destroyed = append(resp.Destroyed, id)
+	}
+	if g.aborted() {
+		return nil, methodErr("stateMismatch", "")
 	}
 	resp.NewState = stateToken(last, "Email")
 	return resp, nil

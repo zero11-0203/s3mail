@@ -260,15 +260,20 @@ class DynamoTable:
         if expected is None:
             condition: dict[str, Any] = {"ConditionExpression": "attribute_not_exists(pk)"}
         else:
+            # Every field: runs sharing a time still differ by state or by
+            # the email they resumed after.
+            names = {"#a": "at", "#s": "state", "#i": "after_id"}
             values = {":at": {"S": expected.at}}
-            if expected.state is None:
-                test = "attribute_not_exists(#s)"
-            else:
-                test = "#s = :s"
-                values[":s"] = {"S": expected.state}
+            tests = ["#a = :at"]
+            for name, value in (("#s", expected.state), ("#i", expected.after_id)):
+                if value is None:
+                    tests.append(f"attribute_not_exists({name})")
+                else:
+                    tests.append(f"{name} = :{name[1]}")
+                    values[f":{name[1]}"] = {"S": value}
             condition = {
-                "ConditionExpression": f"#a = :at AND {test}",
-                "ExpressionAttributeNames": {"#a": "at", "#s": "state"},
+                "ConditionExpression": " AND ".join(tests),
+                "ExpressionAttributeNames": names,
                 "ExpressionAttributeValues": values,
             }
         try:
