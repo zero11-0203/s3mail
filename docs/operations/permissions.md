@@ -252,7 +252,7 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | `OwnerToken` | `bedrock-agentcore:GetResourceOauth2Token` | the default token vault, the `s3mail-agent-cognito` provider and those identities | — |
 | `ReadClientSecret` | `secretsmanager:GetSecretValue` | the `s3mail-agent/cognito-client` secret | — |
 | `ReadModelKey` | `secretsmanager:GetSecretValue` | the `s3mail-agent/model-api-key` secret (the OpenRouter key) | — |
-| `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager, AgentCore or DynamoDB in the region |
+| `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey`, `kms:DescribeKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager, AgentCore or DynamoDB in the region |
 
 **Excluded:** any Bedrock model, mail bucket, mail table, queue, KMS key other than the agent's, search index, deletes or scans on the agent table, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
 

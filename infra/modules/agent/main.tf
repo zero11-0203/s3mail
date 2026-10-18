@@ -262,9 +262,11 @@ resource "aws_iam_role_policy" "runtime" {
         Resource = aws_secretsmanager_secret.model_key.arn
       },
       {
+        # AgentCore checks the Memory's key with the caller's credentials
+        # when long-term records (preferences) are read or written.
         Sid      = "UseAgentKey"
         Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = aws_kms_key.this.arn
         Condition = {
           StringEquals = {

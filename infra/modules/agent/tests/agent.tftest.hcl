@@ -81,7 +81,7 @@ run "runtime_role_has_no_mail_access" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.runtime[0].policy).Statement :
-      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|BatchCreateMemoryRecords|ListMemoryRecords|BatchDeleteMemoryRecords|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|dynamodb:(GetItem|PutItem|Query|BatchGetItem)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey))$", a))])
+      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|BatchCreateMemoryRecords|ListMemoryRecords|BatchDeleteMemoryRecords|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|dynamodb:(GetItem|PutItem|Query|BatchGetItem)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey|DescribeKey))$", a))])
     ])
     error_message = "the runtime role grants only image, logs, traces, Memory, Identity, its own secrets and table: no Bedrock models, S3, SQS, index or mail access"
   }
