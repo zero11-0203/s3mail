@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import logging
 from typing import Any
@@ -9,7 +8,6 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from s3mail_agent import cli
 from s3mail_agent.app import Handler
 from s3mail_agent.config import Settings
 from s3mail_agent.identity import AuthorizationRequired
@@ -89,57 +87,3 @@ async def test_logs_are_content_free(
         assert email["subject"] not in text and email["body"][:20] not in text
     records = [json.loads(r.getMessage()) for r in caplog.records if r.name == "s3mail_agent"]
     assert {r["event"] for r in records} == {"invocation", "invocation_failed"}
-
-
-class FakeRuntimeClient:
-    def __init__(self, replies: list[dict[str, Any]]) -> None:
-        self.replies = replies
-        self.invocations: list[dict[str, Any]] = []
-        self.completed: list[dict[str, Any]] = []
-
-    def invoke_agent_runtime(self, **kwargs: Any) -> dict[str, Any]:
-        self.invocations.append(kwargs)
-        return {"response": io.BytesIO(json.dumps(self.replies.pop(0)).encode())}
-
-    def complete_resource_token_auth(self, **kwargs: Any) -> None:
-        self.completed.append(kwargs)
-
-
-ARN = "arn:aws:bedrock-agentcore:us-east-1:111111111111:runtime/s3mail_agent-abc"
-
-
-def test_cli_ask_sends_owner_and_session(capsys: pytest.CaptureFixture[str]) -> None:
-    client = FakeRuntimeClient([{"status": "ok", "answer": "7pm [email:M1]", "citations": ["M1"]}])
-    assert cli.ask(cli.Runtime(ARN, client=client), "When?", None) == 0
-    sent = client.invocations[0]
-    assert sent["runtimeUserId"] == "owner" and sent["qualifier"] == "live"
-    assert len(sent["runtimeSessionId"]) >= 33
-    assert json.loads(sent["payload"]) == {"mode": "ask", "question": "When?"}
-    assert "7pm" in capsys.readouterr().out
-
-
-def test_cli_ask_reports_missing_authorization() -> None:
-    client = FakeRuntimeClient([{"status": "authorization_required"}])
-    assert cli.ask(cli.Runtime(ARN, client=client), "When?", "cli-thread-" + "0" * 30) == 2
-
-
-def test_cli_login_completes_session_binding(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = FakeRuntimeClient(
-        [
-            {"status": "authorization_required", "authorization_url": "https://auth.example.com/c"},
-            {"status": "ok"},
-        ]
-    )
-    monkeypatch.setattr(cli, "wait_for_callback", lambda url, timeout: "urn:session:1")
-    assert (
-        cli.login(cli.Runtime(ARN, client=client), cli.DEFAULT_RETURN_URL, open_browser=False) == 0
-    )
-    assert client.completed == [
-        {"sessionUri": "urn:session:1", "userIdentifier": {"userId": "owner"}}
-    ]
-
-
-def test_callback_parsing() -> None:
-    assert cli.session_from_callback("/callback?session_id=abc", "/callback") == "abc"
-    assert cli.session_from_callback("/other?session_id=abc", "/callback") is None
-    assert cli.session_from_callback("/callback", "/callback") is None

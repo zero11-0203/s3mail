@@ -13,7 +13,6 @@ The optional, read-only mail assistant (phase A0 of the [agent spec](../docs/spe
 | `src/s3mail_agent/graph.py` | The `StateGraph`: code router, model and tool loop under step, tool-call and token budgets, citation check |
 | `src/s3mail_agent/app.py` | AgentCore entrypoint (`login` and `ask` modes), content-free logs, Memory checkpointer |
 | `src/s3mail_agent/identity.py` | Owner token from the vault; returns the consent URL instead of polling |
-| `src/s3mail_agent/cli.py` | The owner's `agent` CLI |
 | `tests/` | Offline tests against a fake JMAP server, a synthetic `example.com` mailbox and a scripted model |
 
 ## Develop
@@ -32,7 +31,8 @@ Follow [agent deployment](../docs/operations/deployment.md#agent-deployment). Th
 
 ```sh
 export S3MAIL_AGENT_RUNTIME_ARN=$(terraform -chdir=infra/agent output -raw runtime_arn)
-uv run --project agent agent login
-uv run --project agent agent ask "What did the billing emails this month say?"
-uv run --project agent agent ask --thread <id> "Which one is still unpaid?"
+(cd go && go install ./cmd/agent)     # the owner CLI is Go: go/cmd/agent
+agent login
+agent ask "What did the billing emails this month say?"
+agent ask -thread <id> "Which one is still unpaid?"
 ```

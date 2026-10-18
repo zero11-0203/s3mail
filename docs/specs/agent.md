@@ -23,7 +23,7 @@
 
 The agent's components are the "later" band of the [AWS diagram](../diagrams/aws-mail-system.drawio.svg).
 
-- **Callers:** the owner's `agent` CLI (`ask`, `digest`, `login`, `approve`, `forget`). From A1, an EventBridge rule on the existing content-free `EmailReceived` event feeds an SQS queue with a DLQ and a trigger Lambda, which starts one triage run per event. Both call `InvokeAgentRuntime` with SigV4 and pass the owner's user id in the `X-Amzn-Bedrock-AgentCore-Runtime-User-Id` header.
+- **Callers:** the owner's `agent` CLI (`ask`, `digest`, `login`, `approve`, `forget`), a Go terminal helper like `mail-auth` (`go/cmd/agent`). From A1, an EventBridge rule on the existing content-free `EmailReceived` event feeds an SQS queue with a DLQ and a trigger Lambda, which starts one triage run per event. Both call `InvokeAgentRuntime` with SigV4 and pass the owner's user id in the `X-Amzn-Bedrock-AgentCore-Runtime-User-Id` header.
 - **AgentCore Runtime** hosts the LangGraph graph as an ARM64 container image serving `/invocations` and `/ping` on port 8080. Each session runs in its own microVM. Lifecycle: `idleRuntimeSessionTimeout` 900 s, `maxLifetime` 3600 s.
 - **Amazon Bedrock** provides the models through pinned inference profiles: a small model for triage and digest, a larger one for questions, drafts and proposals.
 - **AgentCore Memory** stores the graph checkpoints (short-term events) and, from A2, owner-stated preferences (long-term, user-preference strategy).

@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# The single owner's identity in the token vault and Memory. Both the CLI and
-# the runtime use it, so tokens and checkpoints stay bound to one actor.
+# The single owner's identity in the token vault and Memory. The Go agent CLI
+# (go/internal/agentcli) sends the same value, so tokens and checkpoints stay
+# bound to one actor.
 OWNER_USER_ID = "owner"
 
 

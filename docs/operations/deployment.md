@@ -71,7 +71,7 @@ infra/
   webmail/        Phase 4 webmail hosting, applied separately with its own state
   agent/          Later mail agent on AgentCore, applied separately with its own state
 go/
-  cmd/            Lambda entry points (ingest, dispatch, index, search, jmap, push, submit, bounce, maintenance, canary) and mail-auth/mail-admin CLIs
+  cmd/            Lambda entry points (ingest, dispatch, index, search, jmap, push, submit, bounce, maintenance, canary) and mail-auth/mail-admin/agent CLIs
   internal/       JMAP protocol, MIME parsing, storage, search index and text segmentation, relay interface and adapters (smtp, fake)
 testdata/         Synthetic MIME corpus, recorded client sessions, search queries, fixture generator
 docs/             Architecture, roadmap, topic specs, operations guides

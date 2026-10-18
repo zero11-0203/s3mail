@@ -49,7 +49,7 @@ A single indexer publishes coherent SQLite FTS5 snapshots in S3; a separate sear
 | GC/work-recovery jobs; CloudWatch/X-Ray | [Recovery](operations/recovery.md) and [monitoring](operations/monitoring.md) |
 | Later: LangGraph agent on AgentCore Runtime | [JMAP-only access, approvals, agent stores and phase gates](specs/agent.md) |
 
-All mail backend Lambdas and terminal helpers use Go. Only the later upstream webmail uses its own Node.js server through Web Adapter, and the later agent uses Python. SMTP2GO is the planned first outbound adapter; SES is receiving-only. Phase 0 selects and verifies the receiving region and pinned runtime/provider/client versions. Phase 4 separately validates webmail packaging.
+All mail backend Lambdas and terminal helpers use Go. Only the later upstream webmail uses its own Node.js server through Web Adapter, and the later agent's runtime uses Python (its owner CLI is Go). SMTP2GO is the planned first outbound adapter; SES is receiving-only. Phase 0 selects and verifies the receiving region and pinned runtime/provider/client versions. Phase 4 separately validates webmail packaging.
 
 ## Future extension points
 
