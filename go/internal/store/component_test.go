@@ -133,6 +133,14 @@ func TestComponentUpdateMoveAndDestroy(t *testing.T) {
 	if _, err := a.CommitReceipt(ctx, r); err != nil {
 		t.Fatal(err)
 	}
+	ob, _ := a.Outbox(ctx)
+	i := slices.IndexFunc(ob, func(e OutboxEntry) bool { return e.Destination == "events" })
+	if i < 0 || len(ob[i].Events) != 1 {
+		t.Fatalf("events entry %+v", ob)
+	}
+	if ev := ob[i].Events[0]; ev.ID != r.ID+":received" || ev.Type != "EmailReceived" || ev.EmailID != r.ID || len(ev.MailboxIDs) != 1 {
+		t.Errorf("events entry %+v", ob)
+	}
 	st, _ := a.State(ctx)
 	before := a.mustGet(t, r.ID)
 	after := before.Clone()

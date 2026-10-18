@@ -41,7 +41,7 @@ locals {
       memory      = 128
       timeout     = 60
       concurrency = null
-      env         = { INDEX_QUEUE_URL = var.index_queue_url, SUBMIT_QUEUE_URL = aws_sqs_queue.submit.url }
+      env         = { INDEX_QUEUE_URL = var.index_queue_url, SUBMIT_QUEUE_URL = aws_sqs_queue.submit.url, EVENT_BUS = aws_cloudwatch_event_bus.events.name }
       statements = [
         {
           Sid       = "DrainOwnAccountOutbox"
@@ -61,6 +61,12 @@ locals {
           Effect   = "Allow"
           Action   = "sqs:SendMessage"
           Resource = [var.index_queue_arn, aws_sqs_queue.submit.arn]
+        },
+        {
+          Sid      = "PublishMailEvents"
+          Effect   = "Allow"
+          Action   = "events:PutEvents"
+          Resource = aws_cloudwatch_event_bus.events.arn
         },
       ]
     }
@@ -292,6 +298,14 @@ resource "aws_lambda_alias" "live" {
 }
 
 # --- Dispatch ----------------------------------------------------------------
+
+# Content-free mail events (EmailReceived: ids only) for optional
+# consumers such as the mail agent, which add their own rules
+# (docs/specs/mail-flow.md#inbound-email). Without a rule an event is
+# dropped, so mail never depends on a consumer.
+resource "aws_cloudwatch_event_bus" "events" {
+  name = "${var.name}-events"
+}
 
 # KEYS_ONLY records filtered to outbox inserts. A batch that keeps failing
 # is dropped after a few retries: the entries stay in the table for the

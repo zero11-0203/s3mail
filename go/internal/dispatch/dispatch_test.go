@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zero11-0203/s3mail/go/internal/model"
 	"github.com/zero11-0203/s3mail/go/internal/store"
 )
 
@@ -70,5 +71,38 @@ func TestDrain(t *testing.T) {
 	}
 	if !slices.Equal(o.acked, []string{"OUTBOX#00000000000000000005#events"}) {
 		t.Errorf("acked despite failures: %v", o.acked)
+	}
+}
+
+type publisher struct {
+	events []model.Event
+	err    error
+}
+
+func (p *publisher) Publish(_ context.Context, events []model.Event) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.events = append(p.events, events...)
+	return nil
+}
+
+func TestDrainPublishesEvents(t *testing.T) {
+	ev := model.Event{ID: "Ma:received", Type: "EmailReceived", EmailID: "Ma", MailboxIDs: []string{"inbox"}}
+	o := &outbox{entries: []store.OutboxEntry{
+		{Key: "OUTBOX#00000000000000000005#events", Destination: "events", Events: []model.Event{ev}},
+	}}
+	p := &publisher{err: errors.New("down")}
+	d := &Dispatcher{Outbox: o, Events: p, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	// A failed publish keeps the entry for the next drain.
+	if err := d.Drain(context.Background()); err == nil || len(o.acked) != 0 {
+		t.Fatalf("err %v acks %v", err, o.acked)
+	}
+	p.err = nil
+	if err := d.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.events) != 1 || p.events[0].ID != "Ma:received" || len(o.acked) != 1 {
+		t.Errorf("published %+v acks %v", p.events, o.acked)
 	}
 }

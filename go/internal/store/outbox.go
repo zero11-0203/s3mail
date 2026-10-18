@@ -7,6 +7,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/zero11-0203/s3mail/go/internal/model"
 )
 
 // OutboxEntry is committed dispatch work (OUTBOX#<seq>#<destination>).
@@ -14,7 +16,8 @@ type OutboxEntry struct {
 	Key         string // the sort key, used to acknowledge it
 	Destination string // index, submit or events
 	IDs         []string
-	Trace       string // X-Ray header of the committing request, or ""
+	Events      []model.Event // the content-free events of an events entry
+	Trace       string        // X-Ray header of the committing request, or ""
 }
 
 // Outbox reads every pending entry in commit order.
@@ -28,11 +31,32 @@ func (a *Account) Outbox(ctx context.Context) ([]OutboxEntry, error) {
 			e.IDs = strList(it["emailIds"])
 		case "submit":
 			e.IDs = strList(it["submissionIds"])
+		case "events":
+			e.Events = eventList(it["events"])
 		}
 		out = append(out, e)
 		return nil
 	})
 	return out, err
+}
+
+func eventList(v types.AttributeValue) []model.Event {
+	x, ok := v.(*types.AttributeValueMemberL)
+	if !ok {
+		return nil
+	}
+	out := make([]model.Event, 0, len(x.Value))
+	for _, e := range x.Value {
+		m, ok := e.(*types.AttributeValueMemberM)
+		if !ok {
+			continue
+		}
+		out = append(out, model.Event{
+			ID: str(m.Value["eventId"]), Type: str(m.Value["type"]),
+			EmailID: str(m.Value["emailId"]), MailboxIDs: strList(m.Value["mailboxIds"]),
+		})
+	}
+	return out
 }
 
 // Outbox entries are internal bookkeeping: once committed they are never

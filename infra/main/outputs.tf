@@ -50,6 +50,7 @@ output "agent" {
     oauth_client_id  = module.auth.agent_client_id
     oauth_scopes     = module.auth.agent_scopes
     user_pool_id     = module.auth.user_pool_id
+    event_bus_name   = module.mail_outbound.event_bus.name
   }
 }
 

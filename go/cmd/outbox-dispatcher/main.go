@@ -3,15 +3,19 @@
 // triggered by the table's stream, filtered to outbox inserts, and by a
 // scheduled sweep that also checks the index against the change log.
 //
-// Environment: TABLE, ACCOUNT_ID, INDEX_QUEUE_URL and SUBMIT_QUEUE_URL.
+// Environment: TABLE, ACCOUNT_ID, INDEX_QUEUE_URL and SUBMIT_QUEUE_URL;
+// optionally EVENT_BUS, the EventBridge bus for content-free events such
+// as EmailReceived. Without it events entries are acknowledged unpublished.
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/zero11-0203/s3mail/go/internal/dispatch"
@@ -31,6 +35,9 @@ func main() {
 		Outbox: acct, Search: acct, Log: log,
 		Waker:  &searchcmd.SQSWaker{SQS: q, QueueURL: env["INDEX_QUEUE_URL"]},
 		Submit: &sendcmd.Queue{SQS: q, QueueURL: env["SUBMIT_QUEUE_URL"]},
+	}
+	if bus := os.Getenv("EVENT_BUS"); bus != "" {
+		d.Events = &dispatch.EventBus{Client: eventbridge.NewFromConfig(cfg), Bus: bus, AccountID: env["ACCOUNT_ID"]}
 	}
 	lambda.Start(telemetry.Func(func(ctx context.Context, event json.RawMessage) error {
 		// Stream batches carry only keys; the drain reads the outbox

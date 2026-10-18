@@ -79,6 +79,18 @@ run "least_privilege" {
   }
 
   assert {
+    condition = alltrue([for k, p in aws_iam_role_policy.fn : alltrue([
+      for st in jsondecode(p.policy).Statement : !contains(flatten([st.Action]), "events:PutEvents") || (k == "dispatcher" && st.Resource == aws_cloudwatch_event_bus.events.arn)
+    ])])
+    error_message = "only the dispatcher publishes mail events, and only to the mail event bus"
+  }
+
+  assert {
+    condition     = aws_lambda_function.fn["dispatcher"].environment[0].variables.EVENT_BUS == aws_cloudwatch_event_bus.events.name
+    error_message = "the dispatcher publishes to the mail event bus"
+  }
+
+  assert {
     condition = alltrue([for k in ["dispatcher", "recovery", "delivery"] : alltrue([
       for st in jsondecode(aws_iam_role_policy.fn[k].policy).Statement :
       !anytrue([for a in flatten([st.Action]) : startswith(a, "secretsmanager:") || startswith(a, "s3:")])

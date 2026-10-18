@@ -39,6 +39,11 @@ output "delivery_dlq_arn" {
   value = aws_sqs_queue.delivery_dlq.arn
 }
 
+output "event_bus" {
+  description = "The bus carrying content-free mail events, such as EmailReceived, for optional consumers."
+  value       = { name = aws_cloudwatch_event_bus.events.name, arn = aws_cloudwatch_event_bus.events.arn }
+}
+
 output "delivery_queue_arn" {
   value = aws_sqs_queue.delivery.arn
 }

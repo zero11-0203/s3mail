@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zero11-0203/s3mail/go/internal/model"
 	"github.com/zero11-0203/s3mail/go/internal/search"
 	"github.com/zero11-0203/s3mail/go/internal/store"
 	"github.com/zero11-0203/s3mail/go/internal/telemetry"
@@ -30,6 +31,13 @@ type Queue interface {
 	Enqueue(ctx context.Context, submissionID string, delay time.Duration) error
 }
 
+// Publisher hands content-free events, such as EmailReceived, to the
+// event bus (docs/specs/mail-flow.md#inbound-email). Consumers dedupe
+// on the event id, so a repeated publish is harmless.
+type Publisher interface {
+	Publish(ctx context.Context, events []model.Event) error
+}
+
 // Dispatcher routes entries by destination.
 type Dispatcher struct {
 	Outbox Outbox
@@ -37,6 +45,8 @@ type Dispatcher struct {
 	Search search.Source
 	Waker  search.Waker
 	Submit Queue
+	// Events publishes events entries; nil acknowledges them unpublished.
+	Events Publisher
 	Log    *slog.Logger
 }
 
@@ -91,9 +101,18 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 				ack(e)
 			}
 		case "events":
-			// No event bus consumes EmailReceived yet; the entry is
-			// acknowledged without publishing.
-			ack(e)
+			if d.Events == nil || len(e.Events) == 0 {
+				ack(e)
+				continue
+			}
+			ectx, span := telemetry.Resume(ctx, e.Trace, "dispatch events")
+			err := d.Events.Publish(ectx, e.Events)
+			span.End()
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				ack(e)
+			}
 		default:
 			d.Log.Warn("unknown outbox destination", "key", e.Key)
 		}
