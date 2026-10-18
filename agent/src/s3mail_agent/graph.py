@@ -14,16 +14,19 @@ interrupted node from its start, so proposing, approving and executing are
 separate nodes, and the executor runs only if the resumed hash matches.
 
 Each run sends the model only the earlier turns' questions and accepted
-answers plus the current run's messages. Earlier tool output and interrupted
-tool calls stay in the checkpoint but never reach the model, so a failed run
-cannot corrupt the next one and old excerpts are never fresh evidence.
+answers plus the current run's messages. When a run starts, the router drops
+every earlier message except those kept turns, so the checkpoint stays as
+bounded as the prompt: earlier tool output and interrupted tool calls never
+reach the model, a failed run cannot corrupt the next one and old excerpts
+are never fresh evidence.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -32,6 +35,7 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -42,6 +46,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 from opentelemetry import trace
+from opentelemetry.trace import Span, Status, StatusCode
 from pydantic import BaseModel, ValidationError
 
 from .citations import NO_MAIL, check_evidence
@@ -125,9 +130,29 @@ class Limits:
         return 3 * self.max_steps + 10
 
 
+def _kept(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
+    return [m for m in messages if m.name in (QUESTION, ANSWER)][-2 * CONTEXT_TURNS :]
+
+
 def model_context(messages: Sequence[AnyMessage], run_start: int) -> list[AnyMessage]:
-    earlier = [m for m in messages[:run_start] if m.name in (QUESTION, ANSWER)]
-    return [*earlier[-2 * CONTEXT_TURNS :], *messages[run_start:]]
+    return [*_kept(messages[:run_start]), *messages[run_start:]]
+
+
+@contextmanager
+def _tool_span(name: str) -> Iterator[Span]:
+    """A content-free span: the tool name, result count and error type only.
+    Automatic exception recording is off, because exception text can carry
+    mail or model output (docs/operations/monitoring.md#design)."""
+    with _tracer.start_as_current_span(
+        f"tool {name}", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attribute("s3mail.tool", name)
+        try:
+            yield span
+        except Exception as exc:
+            span.set_attribute("s3mail.error", type(exc).__name__)
+            span.set_status(Status(StatusCode.ERROR))
+            raise
 
 
 def _tool_failures(ai: AIMessage, reason: str) -> list[ToolMessage]:
@@ -161,8 +186,15 @@ def build_graph(
     }
 
     def route(state: AgentState) -> dict[str, Any]:
+        # Persist only what later runs can use: the kept turns. The rest of
+        # the history, earlier tool output included, leaves the checkpoint.
+        history = state.get("messages", [])
+        kept = _kept(history)
+        ids = {m.id for m in kept}
+        dropped = [RemoveMessage(id=m.id) for m in history if m.id and m.id not in ids]
         reset: dict[str, Any] = {
-            "run_start": len(state.get("messages", [])),
+            "messages": dropped,
+            "run_start": len(kept),
             "fetched_ids": [],
             "tools_used": [],
             "budget": Budget(steps=0, tool_calls=0, tokens=0),
@@ -183,7 +215,7 @@ def build_graph(
             return {**reset, "error": ERR_BAD_REQUEST}
         if len(question) > MAX_QUESTION_CHARS:
             return {**reset, "error": ERR_BAD_REQUEST}
-        return {**reset, "messages": [HumanMessage(content=question, name=QUESTION)]}
+        return {**reset, "messages": [*dropped, HumanMessage(content=question, name=QUESTION)]}
 
     async def agent(state: AgentState) -> dict[str, Any]:
         budget = state["budget"]
@@ -245,9 +277,7 @@ def build_graph(
                 )
                 continue
             try:
-                # Content-free span: the tool name and result count only.
-                with _tracer.start_as_current_span(f"tool {name}") as span:
-                    span.set_attribute("s3mail.tool", name)
+                with _tool_span(name) as span:
                     if name in proposing:
                         if proposal is not None:
                             raise ProposalError("one proposal per request")
@@ -466,12 +496,18 @@ async def run_approve(
     snapshot = await graph.aget_state(config)
     pending = snapshot.next or ()
     if "execute" in pending:
-        # The executor was interrupted after the approval was recorded: re-run
-        # it. The recorded decision still has to match, and the send marker
-        # turns a repeated send into a report of the earlier attempt.
+        # The executor was interrupted after the decision was recorded: re-run
+        # it. The recorded decision still has to match, and the action marker
+        # turns a repeated write into a report of the earlier attempt.
         recorded = snapshot.values.get("decision") or {}
         if recorded.get("hash") != approval_hash:
             return {"status": "error", "error": ERR_NO_APPROVAL}
+        if not approve:
+            # A rejection replaces the recorded approval before the executor
+            # resumes, so it can only report an attempt that already began.
+            await graph.aupdate_state(
+                config, {"decision": {"hash": approval_hash, "approve": False}}, as_node="approval"
+            )
         return _result(await graph.ainvoke(None, config))
     if "approval" not in pending:
         return {"status": "error", "error": ERR_NO_APPROVAL}

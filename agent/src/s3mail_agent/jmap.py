@@ -271,15 +271,17 @@ class JmapClient:
         _check_write(name, args, self._writes)
         return await self._post([(name, args)], retry=False)
 
-    async def download(self, blob_id: str, name: str, max_bytes: int) -> bytes:
-        """Download a blob of this account, refusing more than max_bytes."""
+    async def download(self, blob_id: str, max_bytes: int) -> bytes:
+        """Download a blob of this account, refusing more than max_bytes. The
+        URL carries a fixed name: HTTP spans record URLs, and an attachment's
+        name is mail content."""
         session = await self.session()
         if not session.download_url:
             raise JmapError("server has no download URL")
         url = (
             session.download_url.replace("{accountId}", quote(session.account_id, safe=""))
             .replace("{blobId}", quote(blob_id, safe=""))
-            .replace("{name}", quote(name or "attachment", safe=""))
+            .replace("{name}", "attachment")
             .replace("{type}", "application/octet-stream")
         )
         for attempt in range(self._retries + 1):

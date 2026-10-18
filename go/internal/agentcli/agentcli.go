@@ -101,6 +101,8 @@ type Outcome struct {
 	Failed       []string `json:"failed,omitempty"`
 	SubmissionID string   `json:"submission_id,omitempty"`
 	Submissions  []string `json:"submissions,omitempty"`
+	// Emails are an update's emails when its earlier attempt is reported.
+	Emails []string `json:"emails,omitempty"`
 }
 
 // Preference is one owner-stated preference.

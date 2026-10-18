@@ -5,12 +5,17 @@ renders them for the owner and hashes them; the executor runs them only for
 an approval carrying that hash, within 24 hours, at most once.
 
 - propose_update: keywords ($flagged, $seen) and mailbox moves of emails
-  found in this run. Never into Trash, Drafts or Sent, never a destroy.
+  found in this run. Never into Trash, Drafts or Sent, never a destroy. It
+  runs only if those emails still have the keywords and mailboxes they had
+  when proposed.
 - propose_send: one existing draft, solely in Drafts with $draft, from one
-  of the owner's identities. The send-once marker, keyed by the approval
-  hash, is written before EmailSubmission/set; a second attempt with the
-  same approval reports the earlier state instead of sending, and an
-  unknown result is reported, never retried.
+  of the owner's identities.
+
+Before its first write, either kind conditionally puts a marker keyed by the
+approval hash. A second attempt with the same approval, such as a resumed
+executor after a crash, finds the marker and reports instead of writing;
+an unknown result is reported, never retried. A rejection never writes: it
+reports the earlier attempt if the marker shows one began.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .jmap import EMAIL_SET, SUBMISSION_SET, JmapClient, JmapMethodError, JmapUnknownResult
-from .store import AgentTable, SendMarker
+from .store import ActionMarker, AgentTable
 from .tools import HEADER_PROPERTIES, MailboxIndex, body_text, header_of, mailbox_index
 
 APPROVAL_TTL = timedelta(hours=24)
@@ -114,10 +119,12 @@ async def build_update(jmap: JmapClient, args: propose_update, fetched: set[str]
     if out["c0"].get("notFound"):
         raise ProposalError("some emails no longer exist")
     patches: dict[str, dict[str, Any]] = {}
+    before: dict[str, Any] = {}
     lines: list[str] = []
     for email in out["c0"]["list"]:
         keywords = email.get("keywords") or {}
         current = set(email.get("mailboxIds") or {})
+        before[email["id"]] = _looks(email)
         patch: dict[str, Any] = {}
         changes: list[str] = []
         if args.flagged is not None and bool(keywords.get("$flagged")) != args.flagged:
@@ -146,7 +153,19 @@ async def build_update(jmap: JmapClient, args: propose_update, fetched: set[str]
     size = max(session.max_objects_in_set, 1)
     calls = [[EMAIL_SET, {"update": dict(items[i : i + size])}] for i in range(0, len(items), size)]
     summary = f"Change {len(patches)} email(s):\n" + "\n".join(lines)
-    return _finish("update", calls, summary, {"emails": [i for i, _ in items]})
+    emails = [i for i, _ in items]
+    return _finish(
+        "update", calls, summary, {"emails": emails, "before": {i: before[i] for i in emails}}
+    )
+
+
+def _looks(email: dict[str, Any]) -> dict[str, Any]:
+    # What an update depends on: the keywords it may change and the mailboxes.
+    keywords = email.get("keywords") or {}
+    return {
+        "keywords": sorted(k for k in ("$flagged", "$seen") if keywords.get(k)),
+        "mailboxIds": sorted(email.get("mailboxIds") or {}),
+    }
 
 
 async def build_send(jmap: JmapClient, args: propose_send) -> dict[str, Any]:
@@ -237,6 +256,10 @@ async def execute(
     """Run an approved proposal once; anything else runs nothing."""
     now = now or _now()
     if not isinstance(decision, dict) or decision.get("approve") is not True:
+        # A rejection after an interrupted approval: whatever began stays
+        # reported, and nothing more runs.
+        if await table.get_marker(proposal["kind"], proposal["hash"]):
+            return await _report_attempt(jmap, proposal)
         return {"outcome": "rejected"}
     if decision.get("hash") != proposal["hash"]:
         return {"outcome": "approval_mismatch"}
@@ -245,13 +268,33 @@ async def execute(
     if now > datetime.fromisoformat(proposal["expires_at"]):
         return {"outcome": "expired"}
     if proposal["kind"] == "update":
-        return await _execute_update(jmap, proposal)
+        return await _execute_update(jmap, table, proposal, now)
     if proposal["kind"] == "send":
         return await _execute_send(jmap, table, proposal, now)
     return {"outcome": "approval_mismatch"}
 
 
-async def _execute_update(jmap: JmapClient, proposal: dict[str, Any]) -> dict[str, Any]:
+async def _report_attempt(jmap: JmapClient, proposal: dict[str, Any]) -> dict[str, Any]:
+    if proposal["kind"] == "send":
+        return await _report_existing(jmap, proposal["emails"][0])
+    # Some batches may have run; the owner checks the emails in aerc.
+    return {"outcome": "already_attempted", "emails": proposal["emails"]}
+
+
+async def _execute_update(
+    jmap: JmapClient, table: AgentTable, proposal: dict[str, Any], now: datetime
+) -> dict[str, Any]:
+    marker = ActionMarker("update", proposal["hash"], proposal["emails"][0], now.isoformat())
+    if not await table.put_marker(marker):
+        # A re-run of an approval that already reached the update step.
+        return await _report_attempt(jmap, proposal)
+    current = await jmap.call(
+        [("Email/get", {"ids": proposal["emails"], "properties": ["id", "keywords", "mailboxIds"]})]
+    )
+    looks = {e["id"]: _looks(e) for e in current["c0"]["list"]}
+    if looks != proposal["before"]:
+        # Changed since the proposal, perhaps by the owner in another client.
+        return {"outcome": "mail_changed"}
     updated: list[str] = []
     failed: list[str] = []
     for name, args in proposal["calls"]:
@@ -274,8 +317,8 @@ async def _execute_send(
         [("Email/get", {"ids": [draft_id], "properties": ["id", "blobId", "keywords"]})]
     )
     found = current["c0"]["list"]
-    marker = SendMarker(proposal["hash"], draft_id, now.isoformat())
-    if not await table.put_send_marker(marker):
+    marker = ActionMarker("send", proposal["hash"], draft_id, now.isoformat())
+    if not await table.put_marker(marker):
         # A re-run of an approval that already reached the send step.
         return await _report_existing(jmap, draft_id)
     if not found or found[0].get("blobId") != proposal["blob_id"]:

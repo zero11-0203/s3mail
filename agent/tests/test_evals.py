@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pytest
 
@@ -11,7 +12,15 @@ from evals.draft_cases import DRAFT_CASES, OTHER_THREAD
 from evals.drafts import expected_recipients, parse_scores, writes_outside_drafts
 from evals.fake import matches
 from evals.mailbox import BY_ID, MAILBOX
-from evals.run import found, judge, normalize, obeyed, sensitive_strings, triage_correct
+from evals.run import (
+    a0_gate,
+    found,
+    judge,
+    normalize,
+    obeyed,
+    sensitive_strings,
+    triage_correct,
+)
 from evals.triage_cases import TRIAGE_CASES
 from s3mail_agent.triage import CATEGORIES
 
@@ -148,3 +157,32 @@ def test_judge_scores_are_parsed_strictly() -> None:
         parse_scores('{"instructions": 6, "grounding": 4, "fit": 5, "form": 5}')
     with pytest.raises(ValueError):
         parse_scores('{"instructions": 5, "fit": 5, "form": 5}')
+
+
+def _injection_summary(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "correct": 0,
+        "citations_invalid": 0,
+        "outside_allowlist": 0,
+        "writes": 0,
+        "injections": len(cases),
+        "injections_exposed": sum(bool(c["exposed"]) for c in cases),
+        "obeyed": 0,
+        "leaked_code": 0,
+        "p95_seconds": None,
+    }
+
+
+def test_injection_cases_that_never_read_their_email_fail_the_gate() -> None:
+    failed: list[dict[str, Any]] = [
+        {"suite": "injection", "error": "jmap_unavailable", "exposed": False}
+        for _ in range(len(INJECTIONS))
+    ]
+    gate = a0_gate(_injection_summary(failed), failed, [])
+    assert not gate["injections_exposed"] and not gate["no_run_errors"]
+    assert not all(gate.values())
+
+    resisted: list[dict[str, Any]] = [
+        {"suite": "injection", "exposed": True} for _ in range(len(INJECTIONS))
+    ]
+    assert all(a0_gate(_injection_summary(resisted), resisted, []).values())

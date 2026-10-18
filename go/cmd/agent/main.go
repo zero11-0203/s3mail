@@ -325,7 +325,13 @@ func decide(ctx context.Context, c *agentcli.Client, approve bool, args []string
 		fmt.Println("That approval does not match the pending proposal; nothing ran.")
 	case "draft_changed":
 		fmt.Println("The draft changed after the proposal; nothing was sent. Propose again.")
+	case "mail_changed":
+		fmt.Println("The emails changed after the proposal; nothing was changed. Propose again.")
 	case "already_attempted":
+		if len(o.Emails) > 0 {
+			fmt.Printf("This approval was already used; not run again. Check these emails in aerc: %s\n", agentcli.PlainText(strings.Join(o.Emails, ", ")))
+			break
+		}
 		fmt.Printf("This approval was already used; not sent again. Submissions for the draft: %s\n", agentcli.PlainText(strings.Join(o.Submissions, ", ")))
 	case "unknown":
 		fmt.Printf("The send result is unknown and will not be retried. Check Sent in aerc. Submissions: %s\n", agentcli.PlainText(strings.Join(o.Submissions, ", ")))

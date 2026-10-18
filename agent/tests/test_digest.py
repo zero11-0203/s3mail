@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from langchain_core.messages import AIMessage
 
+from s3mail_agent import digest
 from s3mail_agent.digest import run_digest
-from s3mail_agent.jmap import EMAIL_SET, MAILBOX_SET, JmapClient
+from s3mail_agent.jmap import CORE, EMAIL_SET, MAILBOX_SET, JmapClient, JmapMethodError
 from s3mail_agent.store import Cursor, MemoryTable, TriageRow
 
 from .conftest import SESSION_URL, ScriptFactory
@@ -120,7 +122,7 @@ async def test_lost_cursor_state_falls_back_to_a_time_query(scripted: ScriptFact
     assert any(n == "Email/query" for n, _ in s.calls)
 
 
-async def test_changes_are_paged(scripted: ScriptFactory) -> None:
+async def test_changes_are_paged_and_a_capped_window_continues(scripted: ScriptFactory) -> None:
     s, table = setup()
     for i in range(300):
         s.deliver(
@@ -131,8 +133,46 @@ async def test_changes_are_paged(scripted: ScriptFactory) -> None:
     )
     # MAX_EMAILS (300) of the 304 created ids; the draft among them is skipped.
     assert result["emails"] == 299
-    assert "more not listed" in result["digest"]
+    assert "More new mail follows in the next digest." in result["digest"]
     assert sum(n == "Email/changes" for n, _ in s.calls) == 2
+    # The next digest lists the rest, so every email appears exactly once.
+    again = await run_digest(
+        client(s), scripted(AIMessage(content="Bulk [email:N299].")), table, now=NOW
+    )
+    assert again["emails"] == 4 and "follows in the next digest" not in again["digest"]
+    listed = [
+        line.rsplit("[email:", 1)[1].rstrip("]")
+        for text in (result["digest"], again["digest"])
+        for line in text.splitlines()
+        if line.startswith("- Bulk")
+    ]
+    assert sorted(listed) == sorted(f"N{i}" for i in range(300))
+    assert table.cursor is not None and table.cursor.state == f"s{s.seq}"
+
+
+async def test_a_truncated_query_fallback_continues_by_time(scripted: ScriptFactory) -> None:
+    s, table = setup()
+    for i in range(301):
+        at = f"2026-10-17T{13 + i // 60:02d}:{i % 60:02d}:00Z"
+        s.deliver(message(f"N{i}", f"TN{i}", "bulk@example.org", f"Bulk {i}", at, "b"))
+    table.cursor = Cursor("expired-state", "2026-10-17T07:00:00Z")
+    result = await run_digest(client(s), scripted(), table, now=NOW)
+    assert "follows in the next digest" in result["digest"]
+    # The stored cursor covers only listed mail: the next digest queries on.
+    assert table.cursor is not None and table.cursor.state is None
+    assert table.cursor.at > "2026-10-17T07:00:00Z"
+
+
+async def test_a_change_page_budget_bounds_the_work(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+    monkeypatch.setattr(digest, "CHANGES_PAGE", 1)
+    monkeypatch.setattr(digest, "MAX_CHANGE_PAGES", 2)
+    model = scripted(AIMessage(content="x [email:M1]"))
+    result = await run_digest(client(s), model, table, now=NOW)
+    assert sum(n == "Email/changes" for n, _ in s.calls) == 2 and result["emails"] == 2
+    assert table.cursor is not None and table.cursor.state == "s3"
 
 
 async def test_threads_waiting_on_the_owner_are_reminded(scripted: ScriptFactory) -> None:
@@ -185,6 +225,7 @@ async def test_threads_waiting_on_the_owner_are_reminded(scripted: ScriptFactory
 
 async def test_digest_delivered_as_an_email_into_the_agent_mailbox(scripted: ScriptFactory) -> None:
     s, table = setup()
+    start = table.cursor
     jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
     result = await run_digest(
         jmap, scripted(AIMessage(content="x [email:M1]")), table, deliver="mail", now=NOW
@@ -192,7 +233,8 @@ async def test_digest_delivered_as_an_email_into_the_agent_mailbox(scripted: Scr
     email = s.by_id(result["email_id"])
     assert email is not None and "digest" not in result
     agent = next(b for b in s.mailboxes if b["name"] == "Agent")
-    assert email["mailboxIds"] == {agent["id"]: True} and email["keywords"] == {}
+    assert email["mailboxIds"] == {agent["id"]: True}
+    assert list(email["keywords"]) == [digest.DIGEST_KEYWORD.format(digest.window_key(start))]
     assert email["subject"] == "Mail digest 2026-10-18" and "Q3 numbers" in email["body"]
     assert [n for n, _ in s.writes] == ["Mailbox/set", "Email/set"]
 
@@ -203,3 +245,109 @@ async def test_digest_delivered_as_an_email_into_the_agent_mailbox(scripted: Scr
     )
     assert [n for n, _ in s.writes] == ["Mailbox/set", "Email/set", "Email/set"]
     assert "Mail digest" not in s.by_id(again["email_id"])["body"].split("\n", 1)[1]
+
+
+async def test_reminders_stay_within_the_thread_get_limit(scripted: ScriptFactory) -> None:
+    s, table = setup()
+    s.capabilities[CORE]["maxObjectsInGet"] = 64  # s3mail's limit
+    for i in range(65):
+        id, thread = f"W{i}", f"TW{i}"
+        s.deliver(
+            message(id, thread, "friend@example.com", f"Ask {i}", "2026-10-10T09:00:00Z", "?")
+        )
+        table.triage[id] = row(id, thread, "2026-10-10T09:00:00Z", reply=True)
+    table.cursor = Cursor(f"s{s.seq}", "2026-10-17T07:00:00Z")
+    model = scripted(AIMessage(content="x [email:W64]"))
+    result = await run_digest(client(s), model, table, now=NOW)
+    assert result["waiting"] == digest.MAX_REMINDERS
+    assert all(len(a["ids"]) <= 64 for n, a in s.calls if n == "Thread/get")
+
+
+async def test_failed_reminders_do_not_stop_the_digest(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+
+    async def broken(*args: object) -> None:
+        raise JmapMethodError("serverFail")
+
+    monkeypatch.setattr(digest, "_waiting", broken)
+    model = scripted(AIMessage(content="x [email:M1]"))
+    result = await run_digest(client(s), model, table, now=NOW)
+    assert result["status"] == "ok" and "Q3 numbers" in result["digest"]
+    assert "Reminders were unavailable this time." in result["digest"]
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("model timed out"), ValueError("bad reply")])
+async def test_a_model_failure_delivers_the_digest_without_an_overview(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    s, table = setup()
+
+    async def fail(*args: object, **kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(digest, "_overview", fail)
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    result = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+    email = s.by_id(result["email_id"])
+    assert result["overview"] is False and email is not None and "Q3 numbers" in email["body"]
+    assert table.cursor is not None and table.cursor.state == f"s{s.seq - 1}"
+
+
+class FlakyCursor(MemoryTable):
+    def __init__(self, base: MemoryTable) -> None:
+        super().__init__()
+        self.triage, self.cursor = base.triage, base.cursor
+        self.failures = 1
+
+    async def set_cursor(self, cursor: Cursor, expected: Cursor | None) -> bool:
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("table unavailable")
+        return await super().set_cursor(cursor, expected)
+
+
+async def test_a_retried_delivery_finds_its_earlier_email(scripted: ScriptFactory) -> None:
+    s, base = setup()
+    table = FlakyCursor(base)
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    with pytest.raises(RuntimeError):
+        await run_digest(
+            jmap, scripted(AIMessage(content="x [email:M1]")), table, deliver="mail", now=NOW
+        )
+    table.leases.clear()  # the failed run's lease has expired
+    result = await run_digest(
+        jmap, scripted(AIMessage(content="x [email:M1]")), table, deliver="mail", now=NOW
+    )
+    assert [n for n, _ in s.writes] == ["Mailbox/set", "Email/set"]
+    digests = [e["id"] for e in s.mailbox if e["subject"].startswith("Mail digest")]
+    assert digests == [result["email_id"]]
+    # The retry's window also covers the first attempt's digest, never listed.
+    assert table.cursor is not None and table.cursor.state == f"s{s.seq}"
+
+
+async def test_a_concurrent_delivery_of_the_same_window_is_refused(scripted: ScriptFactory) -> None:
+    s, table = setup()
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    stamp = int(NOW.timestamp())
+    assert await table.claim_digest(digest.window_key(table.cursor), stamp, stamp + 600)
+    result = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+    assert result == {"status": "error", "error": "digest_in_progress"} and s.writes == []
+
+
+async def test_a_run_finishing_last_never_moves_the_cursor_back(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+    start = table.cursor
+    await run_digest(client(s), scripted(AIMessage(content="x [email:M1]")), table, now=NOW)
+    newer = table.cursor
+    assert newer != start
+
+    async def stale() -> Cursor | None:
+        return start  # this run read the cursor before the other one finished
+
+    monkeypatch.setattr(table, "get_cursor", stale)
+    later = await run_digest(client(s), scripted(AIMessage(content="x [email:M1]")), table, now=NOW)
+    assert later["cursor"] == "already_advanced" and table.cursor == newer

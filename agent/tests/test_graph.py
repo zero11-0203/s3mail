@@ -333,3 +333,22 @@ async def test_context_keeps_only_recent_questions_and_answers(
     assert not any(isinstance(m, ToolMessage) for m in last)
     assert [m.content for m in last[1:3]] == ["Question 1?", "Answer 1 [email:M1]."]
     assert len(last) == 1 + 2 * CONTEXT_TURNS + 1
+
+
+async def test_saved_history_stays_bounded(scripted: ScriptFactory, client: JmapClient) -> None:
+    saver = InMemorySaver()
+    graph_sizes = []
+    for n in range(2 * CONTEXT_TURNS + 5):
+        model = scripted(
+            tool_turn(call("read_email", {"ids": ["M3"]}, id=f"r{n}")),
+            AIMessage(content=f"Answer {n} [email:M3]."),
+        )
+        assert (await ask(model, client, f"Question {n}?", saver=saver))["status"] == "ok"
+        graph = build_graph(scripted(), client, checkpointer=saver)
+        state = await graph.aget_state({"configurable": {"thread_id": "th-1"}})
+        graph_sizes.append(len(state.values["messages"]))
+    # The kept turns plus one run (question, tool call, tool reply, answer);
+    # the tool output of earlier runs is gone from the checkpoint.
+    assert max(graph_sizes) == 2 * CONTEXT_TURNS + 4
+    messages = state.values["messages"]
+    assert sum(isinstance(m, ToolMessage) for m in messages) == 1

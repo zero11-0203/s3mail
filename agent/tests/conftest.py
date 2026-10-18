@@ -124,6 +124,10 @@ def _matches(email: dict[str, Any], condition: dict[str, Any] | None) -> bool:
     for key in ("text", "from", "to", "subject"):
         if key in condition and condition[key].lower() not in hay[key].lower():
             return False
+    if "inMailbox" in condition and condition["inMailbox"] not in email["mailboxIds"]:
+        return False
+    if "hasKeyword" in condition and condition["hasKeyword"] not in email.get("keywords", {}):
+        return False
     if "after" in condition and email["receivedAt"] < condition["after"]:
         return False
     return not ("before" in condition and email["receivedAt"] >= condition["before"])
@@ -212,6 +216,8 @@ class FakeJmap:
                 "state": "e1",
             }
         if name == "Thread/get":
+            if len(args["ids"]) > self.capabilities[CORE]["maxObjectsInGet"]:
+                raise MethodError("requestTooLarge")
             threads = [
                 {"id": t, "emailIds": [e["id"] for e in self.mailbox if e["threadId"] == t]}
                 for t in args["ids"]

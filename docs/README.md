@@ -32,6 +32,7 @@ Measured Phase 0 results and implementation reviews; requirements stay in the ow
 - [aerc read slice](evidence/phase0-aerc-slice.md)
 - [JMAP RFC conformance review](evidence/jmap-rfc-review.md)
 - [Mail agent design and implementation review](evidence/agent-review.md)
+- [Mail agent implementation review — 2026-10-19](evidence/agent-implementation-review-2026-10-19.md)
 - [Phase 3 gate audit](evidence/phase3-gate-audit.md)
 
 ## Operations

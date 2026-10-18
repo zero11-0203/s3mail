@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from s3mail_agent import graph as graph_module
 from s3mail_agent import proposals
 from s3mail_agent.graph import build_graph, run_approve, run_ask
 from s3mail_agent.jmap import EMAIL_SET, SUBMISSION_SET, JmapClient
@@ -159,7 +163,7 @@ async def test_approved_send_submits_once(scripted: ScriptFactory) -> None:
     assert result["outcome"]["outcome"] == "sent" and submissions(rig.server) == 1
     draft = rig.server.by_id("D1")
     assert draft["mailboxIds"] == {"sent": True} and "$draft" not in draft["keywords"]
-    assert rig.table.markers[approval["hash"]].email_id == "D1"
+    assert rig.table.markers[f"send#{approval['hash']}"].email_id == "D1"
 
 
 # 8
@@ -321,3 +325,99 @@ async def test_executor_without_the_submit_write_cannot_send(scripted: ScriptFac
     with pytest.raises(Exception, match="not allowed"):
         await rig.approve(approval["hash"], writes=frozenset({EMAIL_SET}))
     assert submissions(rig.server) == 0
+
+
+async def crash(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("process killed")
+
+
+# 23
+@pytest.mark.parametrize("kind", ["update", "send"])
+async def test_rejecting_an_interrupted_approval_runs_nothing(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    rig = Rig(server(), scripted, *(search_then(FLAG) if kind == "update" else [SEND]))
+    approval = (await rig.act())["approval"]
+    real = graph_module.execute
+    monkeypatch.setattr(graph_module, "execute", crash)  # killed before the executor ran
+    with pytest.raises(RuntimeError):
+        await rig.approve(approval["hash"])
+    monkeypatch.setattr(graph_module, "execute", real)
+    result = await rig.approve(approval["hash"], approve=False)
+    assert result["outcome"] == {"outcome": "rejected"} and rig.server.writes == []
+    # The rejection is final: approving afterwards finds nothing pending.
+    assert (await rig.approve(approval["hash"]))["error"] == "no_pending_approval"
+    assert rig.server.writes == []
+
+
+# 24
+async def test_rejecting_after_the_send_step_began_reports_it(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = Rig(server(), scripted, SEND)
+    approval = (await rig.act("Send it"))["approval"]
+    monkeypatch.setattr(JmapClient, "write", crash)  # killed after the marker, before sending
+    with pytest.raises(RuntimeError):
+        await rig.approve(approval["hash"])
+    monkeypatch.undo()
+    result = await rig.approve(approval["hash"], approve=False)
+    assert result["outcome"] == {"outcome": "already_attempted", "submissions": []}
+    assert submissions(rig.server) == 0
+
+
+# 25
+async def test_crash_after_an_update_does_not_repeat_it(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = Rig(server(), scripted, *search_then(FLAG))
+    approval = (await rig.act("Flag the news"))["approval"]
+    real_write = JmapClient.write
+
+    async def crash_after(self: JmapClient, name: str, args: dict[str, Any]) -> Any:
+        await real_write(self, name, args)
+        raise RuntimeError("process killed after the update")
+
+    monkeypatch.setattr(JmapClient, "write", crash_after)
+    with pytest.raises(RuntimeError):
+        await rig.approve(approval["hash"])
+    monkeypatch.undo()
+    rig.server.by_id("M1")["keywords"].pop("$flagged")  # the owner unflags it in aerc
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"] == {"outcome": "already_attempted", "emails": ["M1"]}
+    assert updates(rig.server) == 1 and rig.server.by_id("M1")["keywords"] == {}
+
+
+# 26
+async def test_mail_changed_since_the_proposal_is_not_updated(scripted: ScriptFactory) -> None:
+    rig = Rig(server(), scripted, *search_then(ARCHIVE))
+    approval = (await rig.act())["approval"]
+    rig.server.by_id("M2")["mailboxIds"] = {"junk": True}  # moved meanwhile in aerc
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"] == {"outcome": "mail_changed"} and updates(rig.server) == 0
+
+
+# 27
+async def test_failed_proposals_leave_no_content_in_traces(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(graph_module, "_tracer", provider.get_tracer("test"))
+    subject = "SYNTHETIC_PRIVATE_SUBJECT_47"
+    bad = call("propose_update", {"email_ids": ["M1"], "move_to": subject}, id="p1")
+    rig = Rig(server(), scripted, *search_then(bad), AIMessage(content="No such box. [no-action]"))
+    await rig.act()
+    spans = exporter.get_finished_spans()
+    failed = [s for s in spans if s.name == "tool propose_update"]
+    assert failed and failed[0].attributes == {
+        "s3mail.tool": "propose_update",
+        "s3mail.error": "ProposalError",
+    }
+    dump = repr(
+        [
+            (s.attributes, [(e.name, e.attributes) for e in s.events], s.status.description)
+            for s in spans
+        ]
+    )
+    assert subject not in dump and "Traceback" not in dump

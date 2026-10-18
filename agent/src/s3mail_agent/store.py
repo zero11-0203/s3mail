@@ -5,11 +5,14 @@ Items (key pk, sk):
 
     TRIAGE#<emailId>  -     one triage row per email; the first event wins
     CURSOR            digest  the Email state the last digest covered
-    SEND#<hash>       -     the send-once marker of an approved send (A3)
+    DIGEST#<window>   -     the lease of a run delivering that digest window
+    SEND#<hash>       -     the once-only marker of an approved send (A3)
+    UPDATE#<hash>     -     the once-only marker of an approved update (A3)
 
 Triage rows that need a reply carry the sparse `reply` index keys, so the
 digest can list threads waiting on the owner without a scan. Every item but
-the cursor expires after 30 days.
+the cursor expires after 30 days. The cursor is written only over the value
+its run read, so overlapping digests cannot move it backwards.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 TTL_SECONDS = 30 * 24 * 3600
+# BatchGetItem attempts while keys come back unprocessed.
+BATCH_ATTEMPTS = 5
 REPLY_INDEX = "reply"
 REPLY_PK = "WAITING"
 
@@ -39,13 +44,15 @@ class TriageRow:
 
 @dataclass(frozen=True)
 class Cursor:
-    state: str
+    # None after a truncated query fallback: the next digest queries from at.
+    state: str | None
     at: str
 
 
 @dataclass(frozen=True)
-class SendMarker:
-    key: str
+class ActionMarker:
+    kind: str  # "send" or "update"
+    key: str  # the approval hash
     email_id: str
     attempted_at: str
 
@@ -63,12 +70,18 @@ class AgentTable(Protocol):
 
     async def get_cursor(self) -> Cursor | None: ...
 
-    async def set_cursor(self, cursor: Cursor) -> None: ...
+    async def set_cursor(self, cursor: Cursor, expected: Cursor | None) -> bool:
+        """Replace the cursor only if it still equals expected (None: absent);
+        True if replaced."""
 
-    async def put_send_marker(self, marker: SendMarker) -> bool:
+    async def claim_digest(self, window: str, now: int, until: int) -> bool:
+        """Lease a digest window unless another run holds an unexpired lease
+        (epoch seconds); True if claimed."""
+
+    async def put_marker(self, marker: ActionMarker) -> bool:
         """Store the marker unless it exists; True if stored."""
 
-    async def get_send_marker(self, key: str) -> SendMarker | None: ...
+    async def get_marker(self, kind: str, key: str) -> ActionMarker | None: ...
 
 
 def _expires() -> int:
@@ -81,7 +94,8 @@ class MemoryTable:
     def __init__(self) -> None:
         self.triage: dict[str, TriageRow] = {}
         self.cursor: Cursor | None = None
-        self.markers: dict[str, SendMarker] = {}
+        self.markers: dict[str, ActionMarker] = {}
+        self.leases: dict[str, int] = {}
         self.puts = 0
 
     async def put_triage(self, row: TriageRow) -> bool:
@@ -104,17 +118,27 @@ class MemoryTable:
     async def get_cursor(self) -> Cursor | None:
         return self.cursor
 
-    async def set_cursor(self, cursor: Cursor) -> None:
-        self.cursor = cursor
-
-    async def put_send_marker(self, marker: SendMarker) -> bool:
-        if marker.key in self.markers:
+    async def set_cursor(self, cursor: Cursor, expected: Cursor | None) -> bool:
+        if self.cursor != expected:
             return False
-        self.markers[marker.key] = marker
+        self.cursor = cursor
         return True
 
-    async def get_send_marker(self, key: str) -> SendMarker | None:
-        return self.markers.get(key)
+    async def claim_digest(self, window: str, now: int, until: int) -> bool:
+        if self.leases.get(window, 0) >= now:
+            return False
+        self.leases[window] = until
+        return True
+
+    async def put_marker(self, marker: ActionMarker) -> bool:
+        key = f"{marker.kind}#{marker.key}"
+        if key in self.markers:
+            return False
+        self.markers[key] = marker
+        return True
+
+    async def get_marker(self, kind: str, key: str) -> ActionMarker | None:
+        return self.markers.get(f"{kind}#{key}")
 
 
 class DynamoTable:
@@ -167,12 +191,19 @@ class DynamoTable:
                 {"pk": {"S": f"TRIAGE#{i}"}, "sk": {"S": "-"}} for i in ids[start : start + 100]
             ]
             request: dict[str, Any] = {self._table: {"Keys": keys}}
-            while request:
+            for attempt in range(BATCH_ATTEMPTS):
+                if attempt:
+                    # Unprocessed keys mean throttling: back off before retrying.
+                    await asyncio.sleep(0.1 * 2**attempt)
                 out = await asyncio.to_thread(self._db.batch_get_item, RequestItems=request)
                 for item in out.get("Responses", {}).get(self._table, []):
                     row = _triage(item)
                     found[row.email_id] = row
                 request = out.get("UnprocessedKeys") or {}
+                if not request:
+                    break
+            else:
+                raise RuntimeError("agent table reads stayed unprocessed")
         return found
 
     async def waiting_replies(self, since: str) -> list[TriageRow]:
@@ -194,23 +225,60 @@ class DynamoTable:
             "get_item", Key={"pk": {"S": "CURSOR"}, "sk": {"S": "digest"}}, ConsistentRead=True
         )
         item = out.get("Item")
-        return Cursor(item["state"]["S"], item["at"]["S"]) if item else None
+        if not item:
+            return None
+        return Cursor(item["state"]["S"] if "state" in item else None, item["at"]["S"])
 
-    async def set_cursor(self, cursor: Cursor) -> None:
-        await self._run(
-            "put_item",
-            Item={
-                "pk": {"S": "CURSOR"},
-                "sk": {"S": "digest"},
-                "state": {"S": cursor.state},
-                "at": {"S": cursor.at},
-            },
-        )
+    async def set_cursor(self, cursor: Cursor, expected: Cursor | None) -> bool:
+        item: dict[str, Any] = {
+            "pk": {"S": "CURSOR"},
+            "sk": {"S": "digest"},
+            "at": {"S": cursor.at},
+        }
+        if cursor.state is not None:
+            item["state"] = {"S": cursor.state}
+        if expected is None:
+            condition: dict[str, Any] = {"ConditionExpression": "attribute_not_exists(pk)"}
+        else:
+            values = {":at": {"S": expected.at}}
+            if expected.state is None:
+                test = "attribute_not_exists(#s)"
+            else:
+                test = "#s = :s"
+                values[":s"] = {"S": expected.state}
+            condition = {
+                "ConditionExpression": f"#a = :at AND {test}",
+                "ExpressionAttributeNames": {"#a": "at", "#s": "state"},
+                "ExpressionAttributeValues": values,
+            }
+        try:
+            await self._run("put_item", Item=item, **condition)
+        except self._db.exceptions.ConditionalCheckFailedException:
+            return False
+        return True
 
-    async def put_send_marker(self, marker: SendMarker) -> bool:
+    async def claim_digest(self, window: str, now: int, until: int) -> bool:
+        try:
+            await self._run(
+                "put_item",
+                Item={
+                    "pk": {"S": f"DIGEST#{window}"},
+                    "sk": {"S": "-"},
+                    "expires": {"N": str(_expires())},
+                    "until": {"N": str(until)},
+                },
+                ConditionExpression="attribute_not_exists(pk) OR #u < :now",
+                ExpressionAttributeNames={"#u": "until"},
+                ExpressionAttributeValues={":now": {"N": str(now)}},
+            )
+        except self._db.exceptions.ConditionalCheckFailedException:
+            return False
+        return True
+
+    async def put_marker(self, marker: ActionMarker) -> bool:
         return await self._put_new(
             {
-                "pk": {"S": f"SEND#{marker.key}"},
+                "pk": {"S": f"{marker.kind.upper()}#{marker.key}"},
                 "sk": {"S": "-"},
                 "expires": {"N": str(_expires())},
                 "email_id": {"S": marker.email_id},
@@ -218,14 +286,16 @@ class DynamoTable:
             }
         )
 
-    async def get_send_marker(self, key: str) -> SendMarker | None:
+    async def get_marker(self, kind: str, key: str) -> ActionMarker | None:
         out = await self._run(
-            "get_item", Key={"pk": {"S": f"SEND#{key}"}, "sk": {"S": "-"}}, ConsistentRead=True
+            "get_item",
+            Key={"pk": {"S": f"{kind.upper()}#{key}"}, "sk": {"S": "-"}},
+            ConsistentRead=True,
         )
         item = out.get("Item")
         if not item:
             return None
-        return SendMarker(key, item["email_id"]["S"], item["attempted_at"]["S"])
+        return ActionMarker(kind, key, item["email_id"]["S"], item["attempted_at"]["S"])
 
 
 def _attr(value: Any) -> dict[str, Any]:

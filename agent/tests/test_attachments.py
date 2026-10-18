@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import io
 import json
+import multiprocessing
+import time
 import zipfile
+from multiprocessing.connection import Connection
 
 import pytest
 
 from s3mail_agent.attachments import (
+    MAX_TEXT_BYTES,
     MAX_UNZIPPED_BYTES,
     ExtractError,
+    extract_isolated,
     extract_text,
     read_attachment,
     run_read_attachment,
@@ -70,16 +75,47 @@ def test_docx_text_with_entities_but_no_expansion() -> None:
     assert extract_text(doc, DOCX, "inv.docx") == "Invoice & total\n42.00 EUR &a;"
 
 
-def test_xlsx_shared_strings_and_values() -> None:
+def test_xlsx_cells_resolve_to_their_values_by_row() -> None:
     book = ooxml(
         {
-            "xl/sharedStrings.xml": "<sst><si><t>Item</t></si><si><t>Total</t></si></sst>",
-            "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row><c><v>0</v></c></row>"
-            "<row><c><v>184.5</v></c></row></sheetData></worksheet>",
+            "xl/sharedStrings.xml": "<sst><si><t>Alpha</t></si><si><t>Beta</t></si>"
+            "<si><r><t>Gam</t></r><r><t>ma</t></r><rPh><t>reading</t></rPh></si></sst>",
+            "xl/worksheets/sheet1.xml": "<worksheet><sheetData>"
+            '<row r="1"><c r="A1" t="s"><v>1</v></c><c r="B1"><v>42</v></c></row>'
+            '<row r="2"><c r="A2" t="inlineStr"><is><t>Fish &amp; chips</t></is></c>'
+            '<c r="B2" t="s"><v>2</v></c><c r="C2" t="s"><v>9</v></c><c r="D2"/></row>'
+            "</sheetData></worksheet>",
         }
     )
+    # Unused strings stay out; shared-string indices never appear as numbers.
+    assert extract_text(book, XLSX, "b.xlsx") == "Beta | 42\nFish & chips | Gamma"
+
+
+def test_extraction_stops_at_the_text_cap() -> None:
+    rows = "".join(f"<row><c><v>{i:08d}</v></c></row>" for i in range(MAX_TEXT_BYTES))
+    book = ooxml(
+        {"xl/worksheets/sheet1.xml": f"<worksheet><sheetData>{rows}</sheetData></worksheet>"}
+    )
     text = extract_text(book, XLSX, "b.xlsx")
-    assert "Item Total" in text and "184.5" in text
+    assert MAX_TEXT_BYTES < len(text) < 2 * MAX_TEXT_BYTES
+
+
+def _hang(conn: Connection, data: bytes, type: str, name: str) -> None:
+    time.sleep(60)
+
+
+async def test_extraction_is_killed_at_the_deadline() -> None:
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await extract_isolated(b"x", "text/plain", "a.txt", seconds=0.5, target=_hang)
+    assert time.monotonic() - started < 30
+    assert multiprocessing.active_children() == []
+
+
+async def test_isolated_extraction_returns_text_and_errors() -> None:
+    assert await extract_isolated("café".encode(), "text/plain", "a.txt") == "café"
+    with pytest.raises(ExtractError, match="unsupported"):
+        await extract_isolated(b"MZ", "application/x-msdownload", "x.exe")
 
 
 def test_pdf_text() -> None:
