@@ -24,3 +24,25 @@ variable "webmail_callback_urls" {
     error_message = "Webmail callback URLs use https."
   }
 }
+
+variable "agent_callback_urls" {
+  description = "The mail agent's token-vault callback (infra/agent output callback_url); empty registers no agent app client."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.agent_callback_urls) <= 1 && alltrue([for u in var.agent_callback_urls : startswith(u, "https://")])
+    error_message = "The agent client has one https redirect URI: the token-vault callback."
+  }
+}
+
+variable "agent_scopes" {
+  description = "Scopes of the agent client by agent phase (docs/specs/agent.md#identity-and-authorization): mail.read in A0, mail.write from A2, mail.submit from A3."
+  type        = list(string)
+  default     = ["mail.read"]
+
+  validation {
+    condition     = contains(var.agent_scopes, "mail.read") && alltrue([for s in var.agent_scopes : contains(["mail.read", "mail.write", "mail.submit"], s)])
+    error_message = "agent_scopes includes mail.read and only s3mail scope names."
+  }
+}

@@ -38,6 +38,24 @@ jobs:
       - run: go test -race ./...
       - run: go tool govulncheck ./...
 
+  agent:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.9.5
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen mypy src
+      - run: uv run --frozen pytest -q
+
   terraform:
     runs-on: ubuntu-24.04
     steps:
@@ -51,7 +69,7 @@ jobs:
       - run: terraform fmt -check -recursive infra
       - name: terraform validate
         run: |
-          for d in infra/bootstrap infra/main infra/webmail; do
+          for d in infra/bootstrap infra/main infra/webmail infra/agent; do
             terraform -chdir="$d" init -backend=false -input=false
             terraform -chdir="$d" validate
           done

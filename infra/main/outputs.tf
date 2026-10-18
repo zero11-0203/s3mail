@@ -42,6 +42,17 @@ output "webmail" {
   }
 }
 
+output "agent" {
+  description = "Inputs for infra/agent (its terraform.tfvars), or null while no agent client is registered."
+  value = module.auth.agent_client_id == null ? null : {
+    jmap_session_url = "${module.jmap_api.base_url}/.well-known/jmap"
+    oauth_issuer     = module.auth.issuer
+    oauth_client_id  = module.auth.agent_client_id
+    oauth_scopes     = module.auth.agent_scopes
+    user_pool_id     = module.auth.user_pool_id
+  }
+}
+
 output "jmap" {
   description = "JMAP endpoints for aerc and probes."
   value = {

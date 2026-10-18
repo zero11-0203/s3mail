@@ -76,6 +76,29 @@ variable "webmail_locales" {
   default     = ["en", "de", "es", "fr", "it", "ja", "nl", "pl", "pt", "ru", "uk"]
 }
 
+variable "agent_callback_url" {
+  description = <<-EOT
+    The mail agent's token-vault callback (infra/agent output callback_url).
+    Setting it registers the agent's confidential Cognito app client
+    (docs/specs/agent.md#identity-and-authorization). On first deployment
+    use a placeholder such as https://localhost/agent-pending, apply
+    infra/agent, then set the real callback. Null registers nothing.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.agent_callback_url == null || startswith(coalesce(var.agent_callback_url, "-"), "https://")
+    error_message = "agent_callback_url uses https."
+  }
+}
+
+variable "agent_allowed" {
+  description = "Kill switch: false removes the agent client from the authorizer allowlist, stopping the agent within one access-token lifetime, without deleting the client."
+  type        = bool
+  default     = true
+}
+
 variable "owner_subject" {
   description = "The owner's Cognito sub, mapped to the mail account (set in terraform.tfvars)."
   type        = string

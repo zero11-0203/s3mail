@@ -2,12 +2,21 @@
 # CI runs the same checks in .github/workflows/checks.yml.
 
 GOLANGCI_LINT ?= golangci-lint
-TF_DIRS := infra/bootstrap infra/main infra/webmail
+TF_DIRS := infra/bootstrap infra/main infra/webmail infra/agent
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image agent-check agent-image
 
-check: go-check tf-check secrets
+check: go-check agent-check tf-check secrets
+
+# Mail agent (docs/specs/agent.md): lint, types and the offline tests
+# against the fake JMAP server and scripted model; needs uv.
+agent-check:
+	cd agent && uv sync --frozen --quiet
+	cd agent && uv run --frozen ruff check .
+	cd agent && uv run --frozen ruff format --check .
+	cd agent && uv run --frozen mypy src
+	cd agent && uv run --frozen pytest -q
 
 go-check: go-fmt go-vet go-lint go-test go-vuln
 
@@ -77,4 +86,20 @@ webmail-image:
 		--metadata-file webmail/.build-metadata.json -t "$$tag" --push webmail; \
 	digest="$$(grep -o '"containerimage.digest": *"sha256:[0-9a-f]*"' webmail/.build-metadata.json | grep -o 'sha256:[0-9a-f]*')"; \
 	rm -f webmail/.build-metadata.json; \
+	echo "image_digest = \"$$digest\""
+
+# Mail agent image (docs/operations/deployment.md#agent-deployment):
+# linux/arm64 as a single manifest, pushed to the infra/agent repository
+# under an immutable commit tag. Prints the digest to set as image_digest
+# in infra/agent.
+agent-image:
+	@test -n "$(AGENT_REPO)" || { echo 'set AGENT_REPO to: terraform -chdir=infra/agent output -raw repository_url'; exit 1; }
+	@set -e; \
+	registry="$(firstword $(subst /, ,$(AGENT_REPO)))"; region="$$(echo "$$registry" | cut -d. -f4)"; \
+	tag="$(AGENT_REPO):$$(git rev-parse --short HEAD)"; \
+	aws ecr get-login-password --region "$$region" | docker login --username AWS --password-stdin "$$registry" >/dev/null; \
+	docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+		--metadata-file agent/.build-metadata.json -t "$$tag" --push agent; \
+	digest="$$(grep -o '"containerimage.digest": *"sha256:[0-9a-f]*"' agent/.build-metadata.json | grep -o 'sha256:[0-9a-f]*')"; \
+	rm -f agent/.build-metadata.json; \
 	echo "image_digest = \"$$digest\""

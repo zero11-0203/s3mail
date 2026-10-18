@@ -1,6 +1,7 @@
 # One Cognito user pool and one user (docs/specs/security.md#authentication-and-authorization):
 # admin-created only, password sign-in without MFA (owner decision), OAuth bearer tokens as the only API
-# credential. App clients are public (no secret) and use code + PKCE.
+# credential. App clients are public (no secret) and use code + PKCE, except
+# the later mail agent's one confidential client.
 
 data "aws_region" "current" {}
 
@@ -143,6 +144,48 @@ resource "aws_cognito_user_pool_client" "webmail" {
   }
 }
 
+# The mail agent's client (docs/specs/security.md#client-registration-and-discovery),
+# registered only when its token-vault callback is set. Confidential because
+# the AgentCore Identity token vault holds its tokens server-side; the code
+# grant still needs the owner's interactive consent, and client_credentials
+# is never allowed. The owner replaces the generated secret out of band, so
+# no live secret stays in state. Refresh is at the token endpoint by the
+# vault, which keeps one refresh token: rotation stays off for this client.
+resource "aws_cognito_user_pool_client" "agent" {
+  count = length(var.agent_callback_urls) > 0 ? 1 : 0
+
+  name         = "agent"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret                      = true
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = [for s in var.agent_scopes : "${aws_cognito_resource_server.s3mail.identifier}/${s}"]
+  callback_urls                        = var.agent_callback_urls
+  supported_identity_providers         = ["COGNITO"]
+  explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH"]
+
+  access_token_validity  = 5
+  id_token_validity      = 5
+  refresh_token_validity = 30
+  auth_session_validity  = 3
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  enable_token_revocation       = true
+  prevent_user_existence_errors = "ENABLED"
+
+  # The owner-managed secret is added and the generated one deleted outside
+  # Terraform; a later plan must not try to restore it.
+  lifecycle {
+    ignore_changes = [generate_secret]
+  }
+}
+
 resource "aws_cognito_user_pool_domain" "this" {
   user_pool_id          = aws_cognito_user_pool.this.id
   domain                = var.domain_prefix
@@ -161,5 +204,13 @@ resource "aws_cognito_managed_login_branding" "webmail" {
 
   user_pool_id                = aws_cognito_user_pool.this.id
   client_id                   = aws_cognito_user_pool_client.webmail[0].id
+  use_cognito_provided_values = true
+}
+
+resource "aws_cognito_managed_login_branding" "agent" {
+  count = length(aws_cognito_user_pool_client.agent)
+
+  user_pool_id                = aws_cognito_user_pool.this.id
+  client_id                   = aws_cognito_user_pool_client.agent[0].id
   use_cognito_provided_values = true
 }

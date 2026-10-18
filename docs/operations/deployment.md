@@ -91,6 +91,22 @@ The webmail (Phase 4, [browser hosting](../specs/clients.md#browser-hosting-and-
 - **Removal:** destroying `infra/webmail` removes the hosting only (an ECR repository with images must be emptied first); unset `webmail_subdomain` and apply main to remove the registration.
 - **Cost attribution:** resources of this root carry the `Component=webmail` tag. The optional budget filters on it once that tag is activated as a cost allocation tag in Billing.
 
+### Agent deployment
+
+The optional [mail agent](../specs/agent.md) is a separate deployment unit, like the webmail, and starts only after the [Phase 3 cutover](../roadmap.md#agent-phases). The code (`agent/`), the `infra/agent` root and the main-root registration exist; none of it has been applied or validated.
+
+- **Boundary:** `infra/main` owns only the agent's confidential Cognito app client and its authorizer allowlist entry, created by setting `agent_callback_url`; `agent_allowed = false` is the kill switch, removing the allowlist entry without deleting the client. `infra/agent` owns the ECR repository, Memory, the KMS key, the client-secret secret, the AgentCore Identity credential provider, the runtime role, the runtime and its `live` endpoint. It takes the main root's `agent` output as plain variables and never reads the main state.
+- **First deployment:** the client's redirect URI is the credential provider's callback, which exists only after the provider, so the first deployment crosses the two roots twice.
+  1. Set `agent_callback_url = "https://localhost/agent-pending"` in `infra/main` and apply.
+  2. Copy `terraform -chdir=infra/main output -json agent` into `infra/agent/terraform.tfvars`, add the pinned `ask_model_id` and its exact `model_arns`, initialize with `terraform init -backend-config=../backend.hcl` and apply with `image_digest` unset. This creates the repository, key, Memory, empty secret and credential provider.
+  3. Replace the client secret out of band ([agent client](../specs/security.md#client-registration-and-discovery)): `aws cognito-idp add-user-pool-client-secret` with a custom value, then `aws secretsmanager put-secret-value --secret-id <client_secret_arn> --secret-string '{"client_secret":"…"}'` from a file or prompt (not the shell history), then `aws cognito-idp delete-user-pool-client-secret` for the generated secret.
+  4. Set `agent_callback_url` to `terraform -chdir=infra/agent output -raw callback_url` and apply `infra/main` again.
+  5. Run `make agent-image AGENT_REPO=<repository_url>`, set the printed `image_digest` and apply `infra/agent` again to create the role, runtime and `live` endpoint.
+  6. Allow the CLI's login return URL once on the runtime's workload identity, which the runtime creates and Terraform cannot set: `aws bedrock-agentcore-control update-workload-identity --name <name from workload_identity_arn> --allowed-resource-oauth2-return-urls http://localhost:8765/callback`. Then set `S3MAIL_AGENT_RUNTIME_ARN` to the `runtime_arn` output and run `agent login`.
+- **Updates and rollback:** build and apply a new digest; the runtime gets a new version and `live` follows it after the smoke test. Roll back by setting `live_version` to the previous `runtime_version`. The repository keeps the newest ten images.
+- **Removal:** destroying `infra/agent` removes the agent and its derived stores only; unset `agent_callback_url` and apply main to remove the client.
+- **Cost attribution:** resources of this root carry the `Component=agent` tag; the optional budget filters on it.
+
 ### Environment
 
 There is **one deployed environment**, in one AWS account, serving as both production and the place where changes are verified after deploy. A personal project does not justify a second copy of DNS, Cognito and relay setup. Development happens locally against the test harness ([validation approach](deployment.md#validation-approach)), which runs every Go handler and the relay adapters against local fakes; nothing is deployed until it passes there.

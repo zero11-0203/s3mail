@@ -4,7 +4,7 @@
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
+**Status: A0 is implemented but not deployed or validated:** the Python package, image and tests in `agent/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). No gate below has passed. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
 
 ## Required behavior and invariants
 
@@ -134,6 +134,7 @@ Tool-layer guards are defence in depth; s3mail's per-invocation scope checks rem
 
 - **App client:** the one confidential Cognito app client the [security spec allows](security.md#client-registration-and-discovery), registered in `infra/main` and added to the authorizer allowlist. Authorization code grant only, the token-vault callback as its only redirect URI. Its scopes grow by phase: `s3mail/mail.read` in A0, `mail.write` from A2, `mail.submit` from A3.
 - **Token vault:** an AgentCore Identity custom OAuth2 credential provider points at the Cognito issuer and reads the client secret from the agent's Secrets Manager secret. The owner sets that secret out of band with a custom value and deletes the Cognito-generated one, so no live secret stays in Terraform state. The owner consents once (`agent login`, authorization code); the vault stores the refresh token and returns five-minute access tokens to the runtime's workload identity, refreshing automatically.
+- **Consent and session binding:** a run never waits for consent. When the vault has no usable token, the runtime returns `authorization_required`, and only the `login` mode includes the consent URL. `agent login` opens it and serves the vault's return URL once on `http://localhost:8765/callback`; with the returned session id it calls `CompleteResourceTokenAuth` for the owner's user id with the owner's own AWS credentials, binding the tokens to the same user id the CLI passes on every invocation. The return URL is allowed once on the runtime's workload identity after deployment. Event-driven runs from A1 reuse the stored tokens and never need consent.
 - **Kill switch:** removing the agent's `client_id` from the allowlist, or revoking its refresh token, stops the agent within one access-token lifetime.
 - **Inbound:** SigV4 only until a non-AWS caller exists; a Cognito JWT inbound authorizer arrives with webmail chat.
 
@@ -174,10 +175,10 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 ### Deployment and operations
 
 - **Code:** `agent/` holds the Python package (3.12, `uv`-locked: `langgraph` 1.x, `langchain-aws`, `langgraph-checkpoint-aws`, `bedrock-agentcore`, `httpx`, `aws-opentelemetry-distro`), its Dockerfile, the synthetic mailbox and the evaluation sets.
-- **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, and from A1 the EventBridge rule, queue, trigger Lambda and agent table. `infra/main` owns only the agent's Cognito app client and allowlist entry. Use the AWS provider's `aws_bedrockagentcore_*` resources; A0 confirms coverage and falls back to `AWS::BedrockAgentCore::*` through a CloudFormation stack where needed.
+- **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, and from A1 the EventBridge rule, queue, trigger Lambda and agent table. `infra/main` owns only the agent's Cognito app client and allowlist entry. AWS provider 6.69.1's `aws_bedrockagentcore_*` resources cover every A0 resource. The one gap is the allowed OAuth return URLs of the workload identity the runtime creates for itself, set once with `UpdateWorkloadIdentity`; fall back to `AWS::BedrockAgentCore::*` through a CloudFormation stack only if another gap appears.
 - **Release:** build the ARM64 image separately and pass its digest; a release creates a runtime version and moves `live` after a smoke test. Roll back by moving `live` to the previous version.
 - **CI:** lint, type check, unit and graph tests on every push. Prompt, model, tool or graph changes also run the offline evaluation suite against the evaluation runtime; a failed threshold blocks release.
-- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. A separate AWS Budget filters on the `Component=agent` tag.
+- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans, and the botocore Bedrock spans carry model and token counts only with capture off. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. A separate AWS Budget filters on the `Component=agent` tag.
 
 ## Failure handling
 
@@ -231,7 +232,6 @@ Thresholds are starting targets, tuned once A0 produces baselines. Every check u
 
 ## Open questions
 
-- **Session-binding callback.** Consent needs a callback that completes the session binding: a small function URL in `infra/agent`, or a route in the main API.
 - **Inbound auth mix.** Whether one runtime can accept SigV4 and a Cognito JWT, or webmail chat needs a second endpoint.
 - **Triage output.** The agent table (current design), or JMAP keywords on the Email, which would move `mail.write` into A1.
 - **Models.** Which Claude inference profiles are available in the deployment region for triage and questions, and at what cost per run.

@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars (gitignored) and fill in from:
+#   terraform -chdir=../main output -json agent
+region           = "us-east-1"
+jmap_session_url = "https://abc123.execute-api.us-east-1.amazonaws.com/v1/.well-known/jmap"
+oauth_issuer     = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
+oauth_client_id  = "<agent client id>"
+oauth_scopes     = ["s3mail/mail.read"]
+
+# A pinned inference profile, and exactly the ARNs it may route to.
+ask_model_id = "us.anthropic.<model id>"
+model_arns = [
+  "arn:aws:bedrock:us-east-1:111111111111:inference-profile/us.anthropic.<model id>",
+  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.<model id>",
+  "arn:aws:bedrock:us-east-2::foundation-model/anthropic.<model id>",
+  "arn:aws:bedrock:us-west-2::foundation-model/anthropic.<model id>",
+]
+
+# Unset on the first apply; then the digest printed by make agent-image.
+# image_digest = "sha256:<64 hex>"
+
+# budget = { monthly_usd = 5, email = "owner@example.com" }

@@ -59,17 +59,23 @@ module "auth" {
   domain_prefix          = var.auth_domain_prefix
   terminal_callback_urls = var.terminal_callback_urls
   webmail_callback_urls  = local.webmail_origin == null ? [] : [for l in var.webmail_locales : "${local.webmail_origin}/${l}/auth/callback"]
+  # Later mail agent: its app client only; infra/agent deploys the agent.
+  agent_callback_urls = compact([var.agent_callback_url])
 }
 
 module "jmap_api" {
   source = "../modules/jmap-api"
 
-  api_zip               = var.jmap_api_zip
-  download_zip          = var.jmap_download_zip
-  push_zip              = var.jmap_push_zip
-  authorizer_zip        = var.authorizer_zip
-  issuer                = module.auth.issuer
-  client_ids            = compact([module.auth.terminal_client_id, module.auth.webmail_client_id])
+  api_zip        = var.jmap_api_zip
+  download_zip   = var.jmap_download_zip
+  push_zip       = var.jmap_push_zip
+  authorizer_zip = var.authorizer_zip
+  issuer         = module.auth.issuer
+  client_ids = compact([
+    module.auth.terminal_client_id,
+    module.auth.webmail_client_id,
+    var.agent_allowed ? module.auth.agent_client_id : null,
+  ])
   cors_origin           = local.webmail_origin
   scopes                = module.auth.scopes
   owner_subject         = var.owner_subject

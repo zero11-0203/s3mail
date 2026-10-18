@@ -229,6 +229,28 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 
 **Excluded:** any DynamoDB, S3, SQS, SNS, SES, Lambda invoke, Secrets Manager, ECR, IAM or `sts:AssumeRole` grant. The image is pulled by the Lambda service under the repository policy below, not by this role.
 
+### `s3mail-agent-runtime` (AgentCore Runtime execution role)
+
+- **Module:** `infra/modules/agent`, applied only by the separate `infra/agent` root, and created only once an image digest is set (agent A0, not yet applied).
+- **Purpose:** run the [mail agent](../specs/agent.md#identity-and-authorization). It reaches mail only through JMAP with the owner's token from the AgentCore Identity token vault. Trust: `bedrock-agentcore.amazonaws.com` with `aws:SourceAccount` = this account and `aws:SourceArn` like `arn:aws:bedrock-agentcore:<region>:<account>:*`.
+
+| Statement | Actions | Resource | Condition |
+| --- | --- | --- | --- |
+| `PullImage` | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | the `s3mail-agent` repository | — |
+| `EcrToken` | `ecr:GetAuthorizationToken` | `*` | — |
+| `OwnLogGroups` | `logs:CreateLogGroup`, `logs:DescribeLogStreams` | `/aws/bedrock-agentcore/runtimes/s3mail_agent-*` | — |
+| `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | streams of those log groups | — |
+| `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords`, `xray:GetSamplingRules`, `xray:GetSamplingTargets` | `*` | — |
+| `PutMetrics` | `cloudwatch:PutMetricData` | `*` | `cloudwatch:namespace` = `bedrock-agentcore` |
+| `InvokePinnedModels` | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` | the pinned inference profile and the foundation models it routes to, by exact ARN | — |
+| `Checkpoints` | `bedrock-agentcore:CreateEvent`, `GetEvent`, `ListEvents`, `DeleteEvent`, `ListSessions` | the agent's one Memory | — |
+| `WorkloadToken` | `bedrock-agentcore:GetWorkloadAccessToken`, `GetWorkloadAccessTokenForUserId` | the default workload-identity directory and `s3mail_agent-*` identities | — |
+| `OwnerToken` | `bedrock-agentcore:GetResourceOauth2Token` | the default token vault, the `s3mail-agent-cognito` provider and those identities | — |
+| `ReadClientSecret` | `secretsmanager:GetSecretValue` | the `s3mail-agent/cognito-client` secret | — |
+| `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager or AgentCore in the region |
+
+**Excluded:** any mail bucket, mail table, queue, KMS key other than the agent's, search index, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
+
 ## Resource policies
 
 | Resource | Principal | Grant | Condition |
@@ -262,3 +284,4 @@ Same-account identities with IAM permissions, such as the owner's admin session,
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
 - The owner-recovery role, which the owner chose not to create. Uploads run in the API role.
 - The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.
+- The agent's later roles: the A1 trigger Lambda, its CI build and gated deploy roles and the evaluation runner ([agent roles](../specs/agent.md#identity-and-authorization)).
