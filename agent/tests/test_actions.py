@@ -298,7 +298,7 @@ async def test_tampered_proposals_run_nothing() -> None:
 async def test_partial_updates_are_reported_not_retried(scripted: ScriptFactory) -> None:
     rig = Rig(server(), scripted, *search_then(ARCHIVE))
     approval = (await rig.act())["approval"]
-    rig.server.fail_write = "stateMismatch"
+    rig.server.fail_write = "serverFail"
     result = await rig.approve(approval["hash"])
     assert result["outcome"]["outcome"] == "failed" and updates(rig.server) == 1
 
@@ -421,3 +421,47 @@ async def test_failed_proposals_leave_no_content_in_traces(
         ]
     )
     assert subject not in dump and "Traceback" not in dump
+
+
+def before_first_write(monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
+    """Run change once, after the executor's check and before its write."""
+    real = JmapClient.write
+    pending = [change]
+
+    async def write(self: JmapClient, name: str, args: dict[str, Any]) -> Any:
+        if pending:
+            pending.pop()()
+        return await real(self, name, args)
+
+    monkeypatch.setattr(JmapClient, "write", write)
+
+
+# 28
+async def test_a_change_between_the_check_and_the_write_is_not_overwritten(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = Rig(server(), scripted, *search_then(ARCHIVE))
+    approval = (await rig.act())["approval"]
+
+    def owner_trashes() -> None:
+        rig.server.by_id("M1")["mailboxIds"] = {"trash": True}
+        rig.server.touch()
+
+    before_first_write(monkeypatch, owner_trashes)
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"]["outcome"] == "mail_changed"
+    assert rig.server.by_id("M1")["mailboxIds"] == {"trash": True}
+    assert rig.server.by_id("M2")["mailboxIds"] == {"inbox": True}
+
+
+# 29
+async def test_unrelated_new_mail_during_an_update_is_retried(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = Rig(server(), scripted, *search_then(ARCHIVE))
+    approval = (await rig.act())["approval"]
+    arrival = message("M9", "T9", "a@example.com", "New", "2026-10-17T12:00:00Z", "n")
+    before_first_write(monkeypatch, lambda: rig.server.deliver(arrival))
+    result = await rig.approve(approval["hash"])
+    assert result["outcome"]["outcome"] == "done"
+    assert rig.server.by_id("M1")["mailboxIds"] == {"archive": True}

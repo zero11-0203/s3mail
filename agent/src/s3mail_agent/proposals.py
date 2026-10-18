@@ -7,7 +7,8 @@ an approval carrying that hash, within 24 hours, at most once.
 - propose_update: keywords ($flagged, $seen) and mailbox moves of emails
   found in this run. Never into Trash, Drafts or Sent, never a destroy. It
   runs only if those emails still have the keywords and mailboxes they had
-  when proposed.
+  when proposed, checked at an Email state that each write requires with
+  ifInState, so a change in between fails the write instead of mixing.
 - propose_send: one existing draft, solely in Drafts with $draft, from one
   of the owner's identities.
 
@@ -36,6 +37,8 @@ APPROVAL_TTL = timedelta(hours=24)
 MAX_UPDATE_EMAILS = 50
 SEND_PREVIEW_CHARS = 4000
 FORBIDDEN_TARGETS = frozenset({"trash", "drafts", "sent"})
+# Writes of one update batch refused with stateMismatch, each re-checked.
+STATE_ATTEMPTS = 3
 
 
 class _Args(BaseModel):
@@ -288,25 +291,49 @@ async def _execute_update(
     if not await table.put_marker(marker):
         # A re-run of an approval that already reached the update step.
         return await _report_attempt(jmap, proposal)
-    current = await jmap.call(
-        [("Email/get", {"ids": proposal["emails"], "properties": ["id", "keywords", "mailboxIds"]})]
-    )
-    looks = {e["id"]: _looks(e) for e in current["c0"]["list"]}
-    if looks != proposal["before"]:
+    state = await _unchanged(jmap, proposal["emails"], proposal["before"])
+    if state is None:
         # Changed since the proposal, perhaps by the owner in another client.
         return {"outcome": "mail_changed"}
     updated: list[str] = []
     failed: list[str] = []
     for name, args in proposal["calls"]:
-        try:
-            out = await jmap.write(name, args)
-        except JmapUnknownResult:
-            return {"outcome": "unknown", "updated": updated, "failed": failed}
-        except JmapMethodError as exc:
-            return {"outcome": "failed", "error": exc.type, "updated": updated, "failed": failed}
+        batch = list(args["update"])
+        for attempt in range(STATE_ATTEMPTS):
+            # Applied only in the state that was checked: a change made in
+            # between fails the write without applying it.
+            try:
+                out = await jmap.write(name, {**args, "ifInState": state})
+                break
+            except JmapUnknownResult:
+                return {"outcome": "unknown", "updated": updated, "failed": failed}
+            except JmapMethodError as exc:
+                if exc.type != "stateMismatch" or attempt == STATE_ATTEMPTS - 1:
+                    return {
+                        "outcome": "failed",
+                        "error": exc.type,
+                        "updated": updated,
+                        "failed": failed,
+                    }
+            # The account changed, such as by new mail: check this batch again.
+            state = await _unchanged(jmap, batch, proposal["before"])
+            if state is None:
+                return {"outcome": "mail_changed", "updated": updated, "failed": failed}
         updated.extend((out["c0"].get("updated") or {}).keys())
         failed.extend((out["c0"].get("notUpdated") or {}).keys())
+        state = out["c0"]["newState"]
     return {"outcome": "done" if not failed else "partial", "updated": updated, "failed": failed}
+
+
+async def _unchanged(jmap: JmapClient, ids: list[str], before: dict[str, Any]) -> str | None:
+    """The current Email state if these emails look as proposed, else None."""
+    current = await jmap.call(
+        [("Email/get", {"ids": ids, "properties": ["id", "keywords", "mailboxIds"]})]
+    )
+    looks = {e["id"]: _looks(e) for e in current["c0"]["list"]}
+    if looks != {i: before[i] for i in ids}:
+        return None
+    return str(current["c0"]["state"])
 
 
 async def _execute_send(

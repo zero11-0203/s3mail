@@ -109,3 +109,54 @@ async def test_unprocessed_triage_reads_are_retried_a_bounded_number_of_times(
         stub.add_response("batch_get_item", {"Responses": {TABLE: []}, "UnprocessedKeys": keys})
     with stub, pytest.raises(RuntimeError, match="unprocessed"):
         await t.get_triage(["M1"])
+
+
+def triage_item(id: str, received: str) -> dict[str, Any]:
+    return {
+        "email_id": {"S": id},
+        "event_id": {"S": f"{id}:received"},
+        "thread_id": {"S": f"T{id}"},
+        "received_at": {"S": received},
+        "category": {"S": "work"},
+        "priority": {"S": "normal"},
+        "needs_reply": {"BOOL": True},
+        "summary": {"S": "Synthetic."},
+    }
+
+
+async def test_waiting_replies_reads_only_the_newest_candidates() -> None:
+    t, stub = table()
+    query = {
+        "TableName": TABLE,
+        "IndexName": store.REPLY_INDEX,
+        "KeyConditionExpression": "reply_pk = :p AND reply_sk BETWEEN :s AND :u",
+        "ExpressionAttributeValues": {
+            ":p": {"S": store.REPLY_PK},
+            ":s": {"S": "t0"},
+            ":u": {"S": "t9~"},
+        },
+        "ScanIndexForward": False,
+        "Limit": 2,
+    }
+    newest = [triage_item("M3", "t3"), triage_item("M2", "t2")]
+    more = {"reply_pk": {"S": "WAITING"}, "reply_sk": {"S": "t2#M2"}}
+    stub.add_response("query", {"Items": newest, "LastEvaluatedKey": more}, query)
+    with stub:
+        rows = await t.waiting_replies("t0", "t9", 2)
+    # Two rows, oldest first; the older page is never read.
+    assert [r.email_id for r in rows] == ["M2", "M3"]
+
+
+async def test_a_digest_end_round_trips_with_its_anchor() -> None:
+    t, stub = table()
+    end = Cursor(None, "t5", "M7")
+    key = {"pk": {"S": "DIGEST#w1"}, "sk": {"S": "end"}}
+    stub.add_response("put_item", {})
+    stub.add_response(
+        "get_item",
+        {"Item": {**key, "at": {"S": "t5"}, "after_id": {"S": "M7"}}},
+        {"TableName": TABLE, "Key": key, "ConsistentRead": True},
+    )
+    with stub:
+        await t.set_digest_end("w1", end)
+        assert await t.get_digest_end("w1") == end

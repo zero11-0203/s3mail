@@ -201,9 +201,22 @@ class FakeJmap:
         assert args["accountId"] == ACCOUNT
         if name == "Email/query":
             found = [e for e in self.mailbox if _matches(e, args.get("filter"))]
-            found.sort(key=lambda e: e["receivedAt"], reverse=True)
-            ids = [e["id"] for e in found][: args.get("limit", 50)]
-            return {"ids": ids, "total": len(found), "queryState": "q1", "position": 0}
+            # s3mail's order: the requested receivedAt direction (newest
+            # first by default), then id ascending as the tiebreak.
+            sort = (args.get("sort") or [{}])[0]
+            newest_first = not sort.get("isAscending", False)
+            found.sort(key=lambda e: e["id"])
+            found.sort(key=lambda e: e["receivedAt"], reverse=newest_first)
+            all_ids = [e["id"] for e in found]
+            position = int(args.get("position") or 0)
+            if args.get("anchor") is not None:
+                if args["anchor"] not in all_ids:
+                    raise MethodError("anchorNotFound")
+                position = max(
+                    all_ids.index(args["anchor"]) + int(args.get("anchorOffset") or 0), 0
+                )
+            ids = all_ids[position : position + args.get("limit", 50)]
+            return {"ids": ids, "total": len(found), "queryState": "q1", "position": position}
         if name == "Email/get":
             by_id = {e["id"]: e for e in self.mailbox}
             ids = args["ids"]

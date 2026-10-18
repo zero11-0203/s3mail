@@ -97,6 +97,10 @@ class MailServer(FakeJmap):
     def by_id(self, id: str) -> dict[str, Any] | None:
         return next((e for e in self.mailbox if e["id"] == id), None)
 
+    def touch(self) -> None:
+        """Advance the Email state, as any change by another client does."""
+        self.seq += 1
+
     # --- transport -----------------------------------------------------------
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -173,6 +177,8 @@ class MailServer(FakeJmap):
                 made[key] = {"id": mailbox["id"]}
             return {"created": made, "notCreated": None}
         if name == "Email/set":
+            if args.get("ifInState") not in (None, f"s{self.seq}"):
+                raise MethodError("stateMismatch")
             return self._email_set(args)
         if name == "Identity/get":
             assert self.submission
@@ -230,6 +236,8 @@ class MailServer(FakeJmap):
                     target[field][key] = value
             assert target["mailboxIds"], "an email keeps at least one mailbox"
             updated[id] = None
+        if updated:
+            self.touch()
         return {"created": created or None, "updated": updated or None, "newState": f"s{self.seq}"}
 
     def _submission_set(self, args: dict[str, Any]) -> Any:

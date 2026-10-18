@@ -6,6 +6,7 @@ Items (key pk, sk):
     TRIAGE#<emailId>  -     one triage row per email; the first event wins
     CURSOR            digest  the Email state the last digest covered
     DIGEST#<window>   -     the lease of a run delivering that digest window
+    DIGEST#<window>   end   the cursor the window's digest email covers
     SEND#<hash>       -     the once-only marker of an approved send (A3)
     UPDATE#<hash>     -     the once-only marker of an approved update (A3)
 
@@ -44,9 +45,11 @@ class TriageRow:
 
 @dataclass(frozen=True)
 class Cursor:
-    # None after a truncated query fallback: the next digest queries from at.
+    # None after a truncated query fallback: the next digest queries from at,
+    # after the email after_id in (receivedAt, id) order.
     state: str | None
     at: str
+    after_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,8 +68,9 @@ class AgentTable(Protocol):
 
     async def get_triage(self, email_ids: Iterable[str]) -> dict[str, TriageRow]: ...
 
-    async def waiting_replies(self, since: str) -> list[TriageRow]:
-        """Rows that need a reply, received at or after since (ISO 8601)."""
+    async def waiting_replies(self, since: str, until: str, limit: int) -> list[TriageRow]:
+        """The newest limit rows that need a reply, received from since to
+        until (ISO 8601), oldest first."""
 
     async def get_cursor(self) -> Cursor | None: ...
 
@@ -77,6 +81,11 @@ class AgentTable(Protocol):
     async def claim_digest(self, window: str, now: int, until: int) -> bool:
         """Lease a digest window unless another run holds an unexpired lease
         (epoch seconds); True if claimed."""
+
+    async def set_digest_end(self, window: str, end: Cursor) -> None:
+        """Record the cursor a window's digest covers, before it is created."""
+
+    async def get_digest_end(self, window: str) -> Cursor | None: ...
 
     async def put_marker(self, marker: ActionMarker) -> bool:
         """Store the marker unless it exists; True if stored."""
@@ -96,6 +105,7 @@ class MemoryTable:
         self.cursor: Cursor | None = None
         self.markers: dict[str, ActionMarker] = {}
         self.leases: dict[str, int] = {}
+        self.ends: dict[str, Cursor] = {}
         self.puts = 0
 
     async def put_triage(self, row: TriageRow) -> bool:
@@ -111,9 +121,11 @@ class MemoryTable:
     async def get_triage(self, email_ids: Iterable[str]) -> dict[str, TriageRow]:
         return {i: self.triage[i] for i in email_ids if i in self.triage}
 
-    async def waiting_replies(self, since: str) -> list[TriageRow]:
-        rows = [r for r in self.triage.values() if r.needs_reply and r.received_at >= since]
-        return sorted(rows, key=lambda r: (r.received_at, r.email_id))
+    async def waiting_replies(self, since: str, until: str, limit: int) -> list[TriageRow]:
+        rows = [
+            r for r in self.triage.values() if r.needs_reply and since <= r.received_at <= until
+        ]
+        return sorted(rows, key=lambda r: (r.received_at, r.email_id))[-limit:]
 
     async def get_cursor(self) -> Cursor | None:
         return self.cursor
@@ -129,6 +141,12 @@ class MemoryTable:
             return False
         self.leases[window] = until
         return True
+
+    async def set_digest_end(self, window: str, end: Cursor) -> None:
+        self.ends[window] = end
+
+    async def get_digest_end(self, window: str) -> Cursor | None:
+        return self.ends.get(window)
 
     async def put_marker(self, marker: ActionMarker) -> bool:
         key = f"{marker.kind}#{marker.key}"
@@ -206,37 +224,39 @@ class DynamoTable:
                 raise RuntimeError("agent table reads stayed unprocessed")
         return found
 
-    async def waiting_replies(self, since: str) -> list[TriageRow]:
+    async def waiting_replies(self, since: str, until: str, limit: int) -> list[TriageRow]:
         rows: list[TriageRow] = []
         kwargs: dict[str, Any] = {
             "IndexName": REPLY_INDEX,
-            "KeyConditionExpression": "reply_pk = :p AND reply_sk >= :s",
-            "ExpressionAttributeValues": {":p": {"S": REPLY_PK}, ":s": {"S": since}},
+            # reply_sk is "<received>#<id>"; "~" sorts after "#", so rows
+            # received at until are included.
+            "KeyConditionExpression": "reply_pk = :p AND reply_sk BETWEEN :s AND :u",
+            "ExpressionAttributeValues": {
+                ":p": {"S": REPLY_PK},
+                ":s": {"S": since},
+                ":u": {"S": until + "~"},
+            },
+            "ScanIndexForward": False,
+            "Limit": limit,
         }
-        while True:
+        while len(rows) < limit:
             out = await self._run("query", **kwargs)
             rows.extend(_triage(i) for i in out.get("Items", []))
             if "LastEvaluatedKey" not in out:
-                return rows
+                break
             kwargs["ExclusiveStartKey"] = out["LastEvaluatedKey"]
+            kwargs["Limit"] = limit - len(rows)
+        return rows[:limit][::-1]
 
     async def get_cursor(self) -> Cursor | None:
         out = await self._run(
             "get_item", Key={"pk": {"S": "CURSOR"}, "sk": {"S": "digest"}}, ConsistentRead=True
         )
         item = out.get("Item")
-        if not item:
-            return None
-        return Cursor(item["state"]["S"] if "state" in item else None, item["at"]["S"])
+        return _cursor(item) if item else None
 
     async def set_cursor(self, cursor: Cursor, expected: Cursor | None) -> bool:
-        item: dict[str, Any] = {
-            "pk": {"S": "CURSOR"},
-            "sk": {"S": "digest"},
-            "at": {"S": cursor.at},
-        }
-        if cursor.state is not None:
-            item["state"] = {"S": cursor.state}
+        item = {"pk": {"S": "CURSOR"}, "sk": {"S": "digest"}, **_cursor_attrs(cursor)}
         if expected is None:
             condition: dict[str, Any] = {"ConditionExpression": "attribute_not_exists(pk)"}
         else:
@@ -275,6 +295,26 @@ class DynamoTable:
             return False
         return True
 
+    async def set_digest_end(self, window: str, end: Cursor) -> None:
+        await self._run(
+            "put_item",
+            Item={
+                "pk": {"S": f"DIGEST#{window}"},
+                "sk": {"S": "end"},
+                "expires": {"N": str(_expires())},
+                **_cursor_attrs(end),
+            },
+        )
+
+    async def get_digest_end(self, window: str) -> Cursor | None:
+        out = await self._run(
+            "get_item",
+            Key={"pk": {"S": f"DIGEST#{window}"}, "sk": {"S": "end"}},
+            ConsistentRead=True,
+        )
+        item = out.get("Item")
+        return _cursor(item) if item else None
+
     async def put_marker(self, marker: ActionMarker) -> bool:
         return await self._put_new(
             {
@@ -296,6 +336,23 @@ class DynamoTable:
         if not item:
             return None
         return ActionMarker(kind, key, item["email_id"]["S"], item["attempted_at"]["S"])
+
+
+def _cursor_attrs(cursor: Cursor) -> dict[str, Any]:
+    attrs: dict[str, Any] = {"at": {"S": cursor.at}}
+    if cursor.state is not None:
+        attrs["state"] = {"S": cursor.state}
+    if cursor.after_id is not None:
+        attrs["after_id"] = {"S": cursor.after_id}
+    return attrs
+
+
+def _cursor(item: dict[str, Any]) -> Cursor:
+    return Cursor(
+        item["state"]["S"] if "state" in item else None,
+        item["at"]["S"],
+        item["after_id"]["S"] if "after_id" in item else None,
+    )
 
 
 def _attr(value: Any) -> dict[str, Any]:

@@ -253,4 +253,6 @@ Added 2026-10-19 after the review; the findings above are unchanged. The fixes a
 | R11 | **Open.** Separating automated modes needs either a second runtime for triage and digest (its own workload identity, consent and release) or an IAM-verifiable caller boundary; the owner chooses. | — |
 | R12 | The A0 gate also requires every injection case to read its adversarial email and fails on run errors. | The review's all-`jmap_unavailable` result fails the gate offline |
 
+A [follow-up review of these fixes](agent-fix-review-e69137d.md) found that the R3, R4, R5, R7 and R8 resolutions above were incomplete (a check separate from its write, tied query timestamps, a partial reply check, digest reuse across windows, unbounded checkpoint restores); [its resolution](agent-fix-review-e69137d.md#resolution) records the further fixes.
+
 Of the additional observations, `get_triage()` now retries `UnprocessedKeys` at most five times with exponential backoff, then fails (`agent/tests/test_store.py`, which also pins the new conditional cursor, lease and marker requests). Send previews without an attachment inventory and the stale agent README status remain open.

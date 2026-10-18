@@ -307,9 +307,19 @@ class Handler:
         return {"status": "ok", "preferences": [{"id": p.id, "text": p.text} for p in items]}
 
 
-def _runtime_handler() -> Handler:
+def memory_saver(settings: Settings) -> BaseCheckpointSaver[Any]:
+    """The deployed checkpointer. Snapshot storage restores a thread from its
+    latest complete checkpoint instead of replaying the thread's event
+    history; threads saved in the legacy format are still read that way."""
     from langgraph_checkpoint_aws import AgentCoreMemorySaver
 
+    saver: BaseCheckpointSaver[Any] = AgentCoreMemorySaver(
+        settings.memory_id, region_name=settings.region, checkpoint_format="snapshot"
+    )
+    return saver
+
+
+def _runtime_handler() -> Handler:
     from .preferences import AgentCorePreferences
     from .store import DynamoTable
 
@@ -328,7 +338,7 @@ def _runtime_handler() -> Handler:
         settings,
         token_source=vault_token_source(settings),
         model_factory=model,
-        checkpointer=AgentCoreMemorySaver(settings.memory_id, region_name=settings.region),
+        checkpointer=memory_saver(settings),
         table=DynamoTable(settings.agent_table, settings.region) if settings.agent_table else None,
         preferences=AgentCorePreferences(settings.memory_id, settings.region),
     )

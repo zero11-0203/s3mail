@@ -9,11 +9,14 @@ whose citations must be emails in this digest, and a failed overview is
 left out. Ids are re-read with Email/get, so destroyed mail never appears.
 
 The cursor advances only after the digest was delivered, and only past what
-it listed: a capped window ends at the last change page it consumed, and the
-next digest continues there. It is written only over the value this run
-read. A digest delivered as mail carries a keyword naming its window and is
-created under a lease on that window, so a retry finds the earlier email
-instead of creating another.
+it listed: a capped window ends at the last change page it consumed, or at
+the last listed email of a capped query, and the next digest continues
+there. It is written only over the value this run read. A digest delivered
+as mail is created under a lease on the window its cursor starts, carries a
+keyword naming that window, and records the cursor it covers before it is
+created: a retry finds the earlier email and advances only to that cursor,
+so mail arriving in between waits for the next digest. A preview (peek)
+carries no keyword, so it never stands in for the real digest.
 """
 
 from __future__ import annotations
@@ -51,7 +54,9 @@ MAX_REMINDERS = 20
 # emails read, so a reply backlog bounds the work.
 MAX_REMINDER_CANDIDATES = 200
 MAX_REMINDER_READS = 600
-THREAD_TAIL = 20
+# Later emails of one thread read to look for the owner's reply; a longer
+# thread is not inspected, so its row is not reminded.
+MAX_LATER_READS = 50
 AGENT_MAILBOX = "Agent"
 DIGEST_SENDER = {"name": "s3mail agent", "email": "agent@s3mail.invalid"}
 # Marks the digest email of one window, so a retry can find it.
@@ -77,6 +82,8 @@ class Window:
     state: str | None
     # The cursor time to store; None means the digest's own time.
     at: str | None = None
+    # The last listed email of a capped query, where the next one resumes.
+    after_id: str | None = None
 
 
 async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Window:
@@ -105,34 +112,42 @@ async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Wi
             if exc.type not in ("cannotCalculateChanges", "invalidArguments"):
                 raise
     after = cursor.at if cursor is not None else _iso(now - FIRST_WINDOW)
-    # A fresh query: received since the cursor time. The state comes first,
-    # so a later digest sees anything that lands meanwhile.
-    out = await jmap.call(
-        [
-            ("Email/get", {"ids": [], "properties": ["id"]}),
-            (
-                "Email/query",
-                {
-                    "filter": {"after": after},
-                    "sort": [{"property": "receivedAt", "isAscending": True}],
-                    "limit": MAX_EMAILS,
-                    "calculateTotal": True,
-                },
-            ),
-        ]
-    )
+    # A fresh query: received since the cursor time, in (receivedAt, id)
+    # order, resuming after the last email a capped query listed. The state
+    # comes first, so a later digest sees anything that lands meanwhile.
+    query: dict[str, Any] = {
+        "filter": {"after": after},
+        "sort": [{"property": "receivedAt", "isAscending": True}],
+        "limit": MAX_EMAILS,
+        "calculateTotal": True,
+    }
+    if cursor is not None and cursor.state is None and cursor.after_id:
+        query |= {"anchor": cursor.after_id, "anchorOffset": 1}
+    try:
+        out = await jmap.call(
+            [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
+        )
+    except JmapMethodError as exc:
+        if exc.type != "anchorNotFound":
+            raise
+        # The anchor was destroyed: resume from its time, listing that
+        # second's emails again rather than skipping any.
+        query = {k: v for k, v in query.items() if not k.startswith("anchor")}
+        out = await jmap.call(
+            [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
+        )
     ids = out["c1"]["ids"]
     total = int(out["c1"].get("total") or len(ids))
-    if total <= len(ids) or not ids:
+    if not ids or int(out["c1"].get("position") or 0) + len(ids) >= total:
         return Window(ids, 0, out["c0"]["state"])
-    # Truncated: the state covers unlisted mail, so the next digest queries
-    # from the last listed time instead, listing that second's emails again.
+    # Truncated: the state covers unlisted mail, so the next digest resumes
+    # after the last listed email instead.
     last = await _headers(jmap, ids[-1:], ["id", "receivedAt"])
     at = last[0].get("receivedAt") if last else None
-    if not at or at == after:
-        # Time cannot move on; leave out the rest, as reported.
-        return Window(ids, total - len(ids), out["c0"]["state"])
-    return Window(ids, None, None, at)
+    if not at:
+        # Destroyed meanwhile: resume from the same time and anchor.
+        return Window(ids, None, None, after, cursor.after_id if cursor else None)
+    return Window(ids, None, None, at, ids[-1])
 
 
 async def _headers(jmap: JmapClient, ids: list[str], props: list[str]) -> list[dict[str, Any]]:
@@ -151,11 +166,10 @@ async def _waiting(
 ) -> list[tuple[TriageRow, dict[str, Any]]]:
     """Needs-reply rows older than REMIND_AFTER whose thread has no later
     email from the owner (one in the Sent mailbox)."""
-    rows = [
-        r
-        for r in await table.waiting_replies(_iso(now - REMIND_WITHIN))
-        if r.received_at <= _iso(now - REMIND_AFTER) and r.email_id not in exclude
-    ][-MAX_REMINDER_CANDIDATES:]
+    candidates = await table.waiting_replies(
+        _iso(now - REMIND_WITHIN), _iso(now - REMIND_AFTER), MAX_REMINDER_CANDIDATES
+    )
+    rows = [r for r in candidates if r.email_id not in exclude]
     if not rows:
         return []
     session = await jmap.session()
@@ -166,28 +180,35 @@ async def _waiting(
             [("Thread/get", {"ids": thread_ids[i : i + session.max_objects_in_get]})]
         )
         members.update((t["id"], t["emailIds"]) for t in threads["c0"]["list"])
-    # Each row's email and its thread's newest emails, newest rows first,
-    # within the read budget; rows left without their email are skipped.
+    # Each row's email and every later email of its thread (thread members
+    # are oldest first), newest rows first, within the read budget. A row
+    # whose later emails cannot all be read is not reminded: any unread one
+    # could be the owner's reply.
     ids: list[str] = []
+    seen: set[str] = set()
+    later_of: dict[str, list[str]] = {}
     for r in reversed(rows):
-        wanted = [r.email_id, *members.get(r.thread_id, [])[-THREAD_TAIL:]]
-        new = [i for i in dict.fromkeys(wanted) if i not in ids]
+        thread = members.get(r.thread_id, [])
+        if r.email_id not in thread:
+            continue  # destroyed
+        later = thread[thread.index(r.email_id) + 1 :]
+        if len(later) > MAX_LATER_READS:
+            continue
+        new = [i for i in [r.email_id, *later] if i not in seen]
         if len(ids) + len(new) > MAX_REMINDER_READS:
             break
         ids.extend(new)
+        seen.update(new)
+        later_of[r.email_id] = later
     emails = {e["id"]: e for e in await _headers(jmap, ids, [*HEADER_PROPERTIES, "keywords"])}
     waiting = []
     for r in rows:
         email = emails.get(r.email_id)
-        if email is None:
-            continue  # destroyed
-        later = [
-            emails[i]
-            for i in members.get(r.thread_id, [])
-            if i in emails and (emails[i].get("receivedAt") or "") > r.received_at
-        ]
+        if email is None or r.email_id not in later_of:
+            continue  # destroyed, or not fully inspected
+        after = [emails[i] for i in later_of[r.email_id] if i in emails]
         replied = "$answered" in (email.get("keywords") or {}) or any(
-            sent and sent in (e.get("mailboxIds") or {}) for e in later
+            sent and sent in (e.get("mailboxIds") or {}) for e in after
         )
         if not replied:
             waiting.append((r, email))
@@ -306,23 +327,34 @@ async def _agent_mailbox(jmap: JmapClient) -> str:
 
 def window_key(cursor: Cursor | None) -> str:
     """Names the digest window that starts at this cursor."""
-    start = json.dumps([cursor.state, cursor.at] if cursor else None)
+    start = json.dumps([cursor.state, cursor.at, cursor.after_id] if cursor else None)
     return hashlib.sha256(start.encode()).hexdigest()[:16]
 
 
-async def deliver_digest(jmap: JmapClient, text: str, now: datetime, window: str) -> str:
-    """Create the digest as an unread email in the Agent mailbox (A2), or
-    return the one an earlier attempt for this window created."""
-    mailbox = await _agent_mailbox(jmap)
-    keyword = DIGEST_KEYWORD.format(window)
+async def _find_digest(jmap: JmapClient, mailbox: str, window: str) -> str | None:
     found = await jmap.call(
-        [("Email/query", {"filter": {"inMailbox": mailbox, "hasKeyword": keyword}, "limit": 1})]
+        [
+            (
+                "Email/query",
+                {
+                    "filter": {"inMailbox": mailbox, "hasKeyword": DIGEST_KEYWORD.format(window)},
+                    "sort": [{"property": "receivedAt", "isAscending": False}],
+                    "limit": 1,
+                },
+            )
+        ]
     )
-    if found["c0"]["ids"]:
-        return str(found["c0"]["ids"][0])
+    ids = found["c0"]["ids"]
+    return str(ids[0]) if ids else None
+
+
+async def deliver_digest(jmap: JmapClient, text: str, now: datetime, window: str | None) -> str:
+    """Create the digest as an unread email in the Agent mailbox (A2),
+    marked with its window's keyword; a preview (no window) is unmarked."""
+    mailbox = await _agent_mailbox(jmap)
     email = {
         "mailboxIds": {mailbox: True},
-        "keywords": {keyword: True},
+        "keywords": {DIGEST_KEYWORD.format(window): True} if window else {},
         "from": [DIGEST_SENDER],
         "to": [DIGEST_SENDER],
         "subject": f"Mail digest {now.astimezone(UTC):%Y-%m-%d}",
@@ -352,6 +384,15 @@ async def run_digest(
         stamp = int(now.timestamp())
         if not await table.claim_digest(key, stamp, stamp + int(DIGEST_LEASE.total_seconds())):
             return {"status": "error", "error": "digest_in_progress"}
+        existing = await _find_digest(jmap, await _agent_mailbox(jmap), key)
+        end = await table.get_digest_end(key) if existing else None
+        if existing and end is not None:
+            # An earlier attempt created this window's digest: finish it with
+            # the cursor it covers, not one including mail it never listed.
+            reused: dict[str, Any] = {"status": "ok", "email_id": existing, "reused": True}
+            if not await table.set_cursor(end, cursor):
+                reused["cursor"] = "already_advanced"
+            return reused
     window = await _changes(jmap, cursor, now)
     boxes = await mailbox_index(jmap)
     roles = boxes.roles
@@ -396,14 +437,16 @@ async def run_digest(
         "model_calls": meter.calls,
         "tokens": meter.tokens,
     }
+    end = Cursor(window.state, window.at or _iso(now), window.after_id)
     if deliver == "mail":
-        result["email_id"] = await deliver_digest(jmap, text, now, key)
+        if not peek:
+            # Recorded first, so a retry that finds this email knows its end.
+            await table.set_digest_end(key, end)
+        result["email_id"] = await deliver_digest(jmap, text, now, None if peek else key)
     else:
         result["digest"] = text
-    if not peek:
-        # Only over the cursor this run read: a run finishing after a newer
-        # one leaves the newer cursor in place.
-        moved = await table.set_cursor(Cursor(window.state, window.at or _iso(now)), cursor)
-        if not moved:
-            result["cursor"] = "already_advanced"
+    # Only over the cursor this run read: a run finishing after a newer one
+    # leaves the newer cursor in place.
+    if not peek and not await table.set_cursor(end, cursor):
+        result["cursor"] = "already_advanced"
     return result

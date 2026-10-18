@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from s3mail_agent.app import Handler
+from s3mail_agent.app import Handler, memory_saver
 from s3mail_agent.config import Settings
 from s3mail_agent.identity import AuthorizationRequired
 from s3mail_agent.jmap import JmapClient
@@ -312,3 +312,9 @@ async def test_later_mode_logs_are_content_free(
         assert secret not in text
     modes = [json.loads(r.getMessage())["mode"] for r in caplog.records if r.name == "s3mail_agent"]
     assert modes == ["triage", "digest", "remember", "draft"]
+
+
+def test_the_deployed_checkpointer_restores_from_snapshots() -> None:
+    saver: Any = memory_saver(SETTINGS)
+    # Bounded restores read the latest snapshot, never a capped history.
+    assert saver.checkpoint_format == "snapshot" and saver.limit is None
