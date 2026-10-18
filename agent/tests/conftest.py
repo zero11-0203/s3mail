@@ -232,7 +232,7 @@ class ScriptedModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "scripted"
 
-    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> ScriptedModel:  # type: ignore[override]
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> ScriptedModel:
         self.tools = list(tools)
         return self
 

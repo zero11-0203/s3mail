@@ -5,7 +5,7 @@ GOLANGCI_LINT ?= golangci-lint
 TF_DIRS := infra/bootstrap infra/main infra/webmail infra/agent
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image agent-check agent-image
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build webmail-image agent-check agent-eval agent-image
 
 check: go-check agent-check tf-check secrets
 
@@ -15,8 +15,14 @@ agent-check:
 	cd agent && uv sync --frozen --quiet
 	cd agent && uv run --frozen ruff check .
 	cd agent && uv run --frozen ruff format --check .
-	cd agent && uv run --frozen mypy src
+	cd agent && uv run --frozen mypy src evals
 	cd agent && uv run --frozen pytest -q
+
+# The A0 evaluation suite with the real model and the synthetic mailbox
+# (docs/specs/agent.md#evaluation). Calls OpenRouter, so it is not part of
+# check; the key comes from OPENROUTER_API_KEY or the model-key secret.
+agent-eval:
+	cd agent && uv run --frozen python -m evals.run $(EVAL_ARGS)
 
 go-check: go-fmt go-vet go-lint go-test go-vuln
 

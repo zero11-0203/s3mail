@@ -14,6 +14,7 @@ The optional, read-only mail assistant (phase A0 of the [agent spec](../docs/spe
 | `src/s3mail_agent/app.py` | AgentCore entrypoint (`login` and `ask` modes), content-free logs, Memory checkpointer |
 | `src/s3mail_agent/models.py` | The one model factory: OpenRouter's OpenAI-compatible API with `data_collection: deny` routing; reads the owner-set API key |
 | `src/s3mail_agent/identity.py` | Owner token from the vault; returns the consent URL instead of polling |
+| `evals/` | Synthetic evaluation mailbox, question and injection sets, and the runner |
 | `tests/` | Offline tests against a fake JMAP server, a synthetic `example.com` mailbox and a scripted model |
 
 ## Develop
@@ -24,7 +25,14 @@ Needs [uv](https://docs.astral.sh/uv/); Python 3.12 is installed by uv if missin
 make agent-check     # from the repository root: ruff, mypy and pytest
 ```
 
-The tests use no AWS account, model or network. The question, injection and telemetry evaluations of the [A0 gate](../docs/specs/agent.md#a0-gate-mvp) need a deployed runtime and the synthetic account; they are not built yet.
+The tests use no AWS account, model or network.
+
+The [evaluation suite](../docs/specs/agent.md#evaluation) in `evals/` runs 50 questions and 30 injection attempts against a synthetic mailbox with the real model, scores them against the [A0 gate](../docs/specs/agent.md#a0-gate-mvp) and costs about 0.40 USD per full run:
+
+```sh
+make agent-eval                              # key from the s3mail-agent/model-api-key secret
+make agent-eval EVAL_ARGS="--only q01 i00"   # a subset; OPENROUTER_API_KEY overrides the secret
+```
 
 ## Deploy and use
 
