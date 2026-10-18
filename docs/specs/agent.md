@@ -196,6 +196,8 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 | CI deploy (gated) | The `infra/agent` resources under the boundary | Reading the token vault or Memory |
 | Evaluation runner (the owner's credentials, local) | Read the model API key secret | Runtime invoke, Memory, the token vault, any mail data |
 
+**Accepted risk: shared runtime authority (owner decision, 2026-10-19).** The trigger and the owner's CLI invoke the same runtime with the same user id, and the runtime picks the mode from the payload without knowing the caller. Anyone able to misuse the trigger's credentials or execution therefore has the owner's full command authority through the runtime, within the granted scopes: `ask` over any mail, reading and changing preferences, and `act` followed by `approve` for mailbox updates. The normal event path sends only `triage`, mail cannot inject a mode, and the trigger has no direct mail, Memory or table access. The owner accepted this for `mail.read` and `mail.write` rather than run a second runtime (its own workload identity, consent and release) for triage and digest, which remains the fix; a payload field naming the caller would not be a boundary. It must be revisited before `mail.submit` is granted ([A3 gate](#a3-gate-approved-actions)), when the same authority would extend to sending ([review finding R11](../evidence/agent-implementation-review-2026-10-19.md#r11--automated-invocation-authority-also-authorizes-owner-commands)).
+
 **Prompt-injection defences:**
 
 1. Mail enters a model only inside tool results marked as data; the system prompt states that data never carries instructions.
@@ -324,6 +326,7 @@ Offline, the guard tests (`agent/tests/test_drafts.py`) refuse every draft outsi
 
 - [ ] 20 approval scenarios, including crash after submit: 0 actions without a matching approval, 0 re-submissions.
 - [ ] Expired and rejected approvals run nothing.
+- [ ] Before `mail.submit` is granted, the owner revisits the [shared runtime authority](#identity-and-authorization) risk: the automated caller is separated from owner commands at an authenticated boundary, or the risk is accepted again with sending in scope and recorded here.
 
 Offline, 32 approval test cases against the stateful fake server (`agent/tests/test_actions.py`) cover approval, rejection, expiry, a wrong or recomputed hash, a changed draft or changed emails (also between the executor's check and its write, and unrelated new mail at that moment), a transport failure after the send was applied, a crash after submit or after an update resumed by a second `approve`, and a rejection after a crash before or inside the executor ([2026-10-19 review](../evidence/agent-implementation-review-2026-10-19.md#resolution)): none runs an action without a matching approval, runs a rejected one, or writes twice. The gate stays open until it runs against the deployed runtime with `mail.submit`.
 

@@ -128,7 +128,7 @@ Optional and off by default; it sends indexed mail text to OpenRouter ([data lea
 
 #### Granting agent scopes
 
-Each scope is granted only after the previous gate passes ([agent phases](../roadmap.md#agent-phases)): `mail.write` after the A1 gate, `mail.submit` after the A2 gate.
+Each scope is granted only after the previous gate passes ([agent phases](../roadmap.md#agent-phases)): `mail.write` after the A1 gate, `mail.submit` after the A2 gate and after the owner revisits the agent's [accepted shared runtime authority](../specs/agent.md#identity-and-authorization) risk.
 
 1. Add the scope to `agent_scopes` in `infra/main/terraform.tfvars`, for example `agent_scopes = ["mail.read", "mail.write"]`, and apply `infra/main`. Cognito now allows the scope for the agent client.
 2. Copy the new `oauth_scopes` from `terraform -chdir=infra/main output -json agent` into `infra/agent/terraform.tfvars` and release the runtime as above. The runtime requests and enables only its configured scopes, so modes needing a missing scope keep returning `scope_not_granted`.
