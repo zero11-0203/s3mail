@@ -13,6 +13,11 @@ output "client_secret_arn" {
   value       = module.agent.client_secret_arn
 }
 
+output "model_key_secret_arn" {
+  description = "Secret the owner fills with {\"api_key\": ...}, the OpenRouter key."
+  value       = module.agent.model_key_secret_arn
+}
+
 output "runtime_arn" {
   description = "S3MAIL_AGENT_RUNTIME_ARN for the agent CLI, once an image is deployed."
   value       = module.agent.runtime_arn

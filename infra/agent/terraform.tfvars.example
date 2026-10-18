@@ -6,14 +6,9 @@ oauth_issuer     = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_exampl
 oauth_client_id  = "<agent client id>"
 oauth_scopes     = ["s3mail/mail.read"]
 
-# A pinned inference profile, and exactly the ARNs it may route to.
-ask_model_id = "us.anthropic.<model id>"
-model_arns = [
-  "arn:aws:bedrock:us-east-1:111111111111:inference-profile/us.anthropic.<model id>",
-  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.<model id>",
-  "arn:aws:bedrock:us-east-2::foundation-model/anthropic.<model id>",
-  "arn:aws:bedrock:us-west-2::foundation-model/anthropic.<model id>",
-]
+# The pinned OpenRouter model (the default); its API key goes in the
+# model_key_secret_arn secret, never here.
+# ask_model = "openai/gpt-6.1-sol"
 
 # Unset on the first apply; then the digest printed by make agent-image.
 # image_digest = "sha256:<64 hex>"

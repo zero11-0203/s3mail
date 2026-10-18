@@ -25,7 +25,7 @@ The agent's components are the "later" band of the [AWS diagram](../diagrams/aws
 
 - **Callers:** the owner's `agent` CLI (`ask`, `digest`, `login`, `approve`, `forget`), a Go terminal helper like `mail-auth` (`go/cmd/agent`). From A1, an EventBridge rule on the existing content-free `EmailReceived` event feeds an SQS queue with a DLQ and a trigger Lambda, which starts one triage run per event. Both call `InvokeAgentRuntime` with SigV4 and pass the owner's user id in the `X-Amzn-Bedrock-AgentCore-Runtime-User-Id` header.
 - **AgentCore Runtime** hosts the LangGraph graph as an ARM64 container image serving `/invocations` and `/ping` on port 8080. Each session runs in its own microVM. Lifecycle: `idleRuntimeSessionTimeout` 900 s, `maxLifetime` 3600 s.
-- **Amazon Bedrock** provides the models through pinned inference profiles: a small model for triage and digest, a larger one for questions, drafts and proposals.
+- **OpenRouter** provides the models through its OpenAI-compatible API, by pinned model id (questions: `openai/gpt-6.1-sol`; a smaller model for triage and digest from A1). Bedrock model access is not available to this personal account, so models are an external HTTPS dependency; AgentCore Runtime, Memory and Identity are unaffected. The API key is an owner-set Secrets Manager secret the runtime reads on first use. Every request sets OpenRouter provider routing `data_collection: deny`, so prompts, which carry mail excerpts, go only to providers that neither store nor train on them. Mail excerpts therefore leave AWS for OpenRouter and the model provider; this is the accepted data-processing boundary of the agent, and the agent stays optional.
 - **AgentCore Memory** stores the graph checkpoints (short-term events) and, from A2, owner-stated preferences (long-term, user-preference strategy).
 - **AgentCore Identity** gives the runtime a workload identity and holds the owner's Cognito tokens in its token vault (see [identity and authorization](#identity-and-authorization)).
 - **AgentCore Observability** sends traces and metrics to CloudWatch; **AgentCore Evaluations** scores synthetic runs only.
@@ -78,7 +78,7 @@ flowchart LR
 
 **Send-once marker.** LangGraph saves a node's state update only when the node finishes, so a checkpoint flag cannot record a send that crashed mid-node. Before `EmailSubmission/set`, the send node conditionally puts a marker keyed by `send_key` in the agent table. If the marker already exists, the run is a re-run: it does not send, queries `EmailSubmission/query` for the draft and reports the state to the owner.
 
-**Budgets and models.** The recursion limit and `budget` counters end a run with a clear error rather than looping. Both models sit behind one `ChatBedrockConverse` factory, so a model change is a configuration change plus an evaluation run.
+**Budgets and models.** The recursion limit and `budget` counters end a run with a clear error rather than looping. Both models sit behind one `ChatOpenAI` factory pointed at OpenRouter, so a model change is a configuration change plus an evaluation run.
 
 ### Features
 
@@ -142,7 +142,7 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 
 | Role | Allowed | Explicitly not allowed |
 | --- | --- | --- |
-| Runtime execution | `bedrock:InvokeModel*` on pinned inference profiles; Memory APIs on one memory; token APIs on its own workload identity and provider; its log group and X-Ray; ECR pull on one repository; the agent table from A1 | Any mail bucket, table, queue, key or index |
+| Runtime execution | Its two secrets (Cognito client secret, model API key); Memory APIs on one memory; token APIs on its own workload identity and provider; its log group and X-Ray; ECR pull on one repository; the agent table from A1 | Any mail bucket, table, queue, key or index; Bedrock models |
 | Trigger Lambda | `InvokeAgentRuntime` on one runtime endpoint; receive/delete on one queue | Models, Memory, Identity |
 | CI build | Push to the agent ECR repository | Runtime invoke on production; token APIs |
 | CI deploy (gated) | The `infra/agent` resources under the boundary | Reading the token vault or Memory |
@@ -155,7 +155,7 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 3. Side effects run only in deterministic nodes after an interrupt.
 4. No URL fetching or other outbound network tools; links in mail are shown as text.
 5. Drafts never include other threads unless the owner's request names them.
-6. Optional hardening: a Bedrock Guardrails prompt-attack filter on tool results if the injection suite shows misses.
+6. Optional hardening: a prompt-attack classifier on tool results if the injection suite shows misses (Bedrock Guardrails is not available to this account).
 
 ### State and memory
 
@@ -174,11 +174,11 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 
 ### Deployment and operations
 
-- **Code:** `agent/` holds the Python package (3.12, `uv`-locked: `langgraph` 1.x, `langchain-aws`, `langgraph-checkpoint-aws`, `bedrock-agentcore`, `httpx`, `aws-opentelemetry-distro`), its Dockerfile, the synthetic mailbox and the evaluation sets.
-- **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, and from A1 the EventBridge rule, queue, trigger Lambda and agent table. `infra/main` owns only the agent's Cognito app client and allowlist entry. AWS provider 6.69.1's `aws_bedrockagentcore_*` resources cover every A0 resource. The one gap is the allowed OAuth return URLs of the workload identity the runtime creates for itself, set once with `UpdateWorkloadIdentity`; fall back to `AWS::BedrockAgentCore::*` through a CloudFormation stack only if another gap appears.
+- **Code:** `agent/` holds the Python package (3.12, `uv`-locked: `langgraph` 1.x, `langchain-openai`, `langgraph-checkpoint-aws`, `bedrock-agentcore`, `httpx`, `aws-opentelemetry-distro`), its Dockerfile, the synthetic mailbox and the evaluation sets.
+- **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, the model API key secret, and from A1 the EventBridge rule, queue, trigger Lambda and agent table. `infra/main` owns only the agent's Cognito app client and allowlist entry. AWS provider 6.69.1's `aws_bedrockagentcore_*` resources cover every A0 resource. The one gap is the allowed OAuth return URLs of the workload identity the runtime creates for itself, set once with `UpdateWorkloadIdentity`; fall back to `AWS::BedrockAgentCore::*` through a CloudFormation stack only if another gap appears.
 - **Release:** build the ARM64 image separately and pass its digest; a release creates a runtime version and moves `live` after a smoke test. Roll back by moving `live` to the previous version.
 - **CI:** lint, type check, unit and graph tests on every push. Prompt, model, tool or graph changes also run the offline evaluation suite against the evaluation runtime; a failed threshold blocks release.
-- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans, and the botocore Bedrock spans carry model and token counts only with capture off. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. A separate AWS Budget filters on the `Component=agent` tag.
+- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans and logs token counts per run; model HTTPS calls are not instrumented with content. Alarms on invocation errors, DLQ depth, `authorization_required` (re-run `agent login`), tool-allowlist violations and daily tokens over budget. A separate AWS Budget filters on the `Component=agent` tag; it cannot see OpenRouter spend, so the OpenRouter key carries its own credit limit.
 
 ## Failure handling
 
@@ -234,7 +234,7 @@ Thresholds are starting targets, tuned once A0 produces baselines. Every check u
 
 - **Inbound auth mix.** Whether one runtime can accept SigV4 and a Cognito JWT, or webmail chat needs a second endpoint.
 - **Triage output.** The agent table (current design), or JMAP keywords on the Email, which would move `mail.write` into A1.
-- **Models.** Which Claude inference profiles are available in the deployment region for triage and questions, and at what cost per run.
+- **Models.** Which OpenRouter model to pin for triage and digest, and at what cost per run. Long-term memory extraction (A2) and AgentCore Evaluations judges use Bedrock models by default, so both need a non-Bedrock alternative or Bedrock access before those phases.
 - **Memory retention.** Whether a 7-day checkpoint expiry is acceptable for mail excerpts, or CLI threads should be purged on exit.
 
 ## References

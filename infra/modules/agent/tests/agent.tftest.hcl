@@ -51,11 +51,6 @@ variables {
   oauth_issuer     = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example"
   oauth_client_id  = "agentclient"
   oauth_scopes     = ["s3mail/mail.read"]
-  ask_model_id     = "us.example.model-v1"
-  model_arns = [
-    "arn:aws:bedrock:us-east-1:111111111111:inference-profile/us.example.model-v1",
-    "arn:aws:bedrock:us-east-1::foundation-model/example.model-v1",
-  ]
 }
 
 run "runtime_role_has_no_mail_access" {
@@ -63,9 +58,9 @@ run "runtime_role_has_no_mail_access" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.runtime[0].policy).Statement :
-      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock:InvokeModel(WithResponseStream)?|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey))$", a))])
+      alltrue([for a in flatten([s.Action]) : can(regex("^(ecr:(BatchGetImage|GetDownloadUrlForLayer|GetAuthorizationToken)|logs:(CreateLogGroup|DescribeLogStreams|CreateLogStream|PutLogEvents)|xray:(PutTraceSegments|PutTelemetryRecords|GetSamplingRules|GetSamplingTargets)|cloudwatch:PutMetricData|bedrock-agentcore:(CreateEvent|GetEvent|ListEvents|DeleteEvent|ListSessions|GetWorkloadAccessToken|GetWorkloadAccessTokenForUserId|GetResourceOauth2Token)|secretsmanager:GetSecretValue|kms:(Decrypt|GenerateDataKey))$", a))])
     ])
-    error_message = "the runtime role grants only image, logs, traces, models, Memory, Identity and its own secret: no S3, DynamoDB, SQS or index access"
+    error_message = "the runtime role grants only image, logs, traces, Memory, Identity and its own secrets: no Bedrock models, S3, DynamoDB, SQS or index access"
   }
 
   assert {
@@ -77,9 +72,9 @@ run "runtime_role_has_no_mail_access" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.runtime[0].policy).Statement :
-      jsonencode(s.Resource) == jsonencode(var.model_arns) if s.Sid == "InvokePinnedModels"
+      contains([aws_secretsmanager_secret.client.arn, aws_secretsmanager_secret.model_key.arn], s.Resource) if s.Action == "secretsmanager:GetSecretValue"
     ])
-    error_message = "models are invoked only by their pinned ARNs"
+    error_message = "the runtime reads only its own two secrets"
   }
 
   assert {
@@ -110,6 +105,15 @@ run "telemetry_is_content_free_and_lifecycle_bounded" {
       aws_bedrockagentcore_agent_runtime.this[0].lifecycle_configuration[0].max_lifetime == 3600
     )
     error_message = "sessions idle out after 900 s and end after 3600 s"
+  }
+
+  assert {
+    condition = (
+      aws_bedrockagentcore_agent_runtime.this[0].environment_variables["ASK_MODEL"] == "openai/gpt-6.1-sol" &&
+      aws_bedrockagentcore_agent_runtime.this[0].environment_variables["MODEL_KEY_SECRET_ARN"] == aws_secretsmanager_secret.model_key.arn &&
+      !contains(keys(aws_bedrockagentcore_agent_runtime.this[0].environment_variables), "OPENROUTER_API_KEY")
+    )
+    error_message = "the runtime gets the pinned model and the key's ARN, never the key"
   }
 
   assert {
@@ -168,12 +172,12 @@ run "image_must_be_pinned_by_digest" {
   expect_failures = [var.image_uri]
 }
 
-run "model_wildcards_are_rejected" {
+run "model_api_must_use_https" {
   command = plan
 
   variables {
-    model_arns = ["arn:aws:bedrock:*::foundation-model/*"]
+    model_base_url = "http://openrouter.example.com/api/v1"
   }
 
-  expect_failures = [var.model_arns]
+  expect_failures = [var.model_base_url]
 }

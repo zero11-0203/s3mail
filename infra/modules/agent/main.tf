@@ -4,7 +4,7 @@
 # through JMAP with those tokens, so the runtime role has no grant on any
 # mail bucket, table, queue, key or index.
 #
-# Memory, the key, the client secret and the credential provider exist
+# Memory, the key, both secrets and the credential provider exist
 # before an image does; the role, runtime and live endpoint only with one.
 
 data "aws_region" "current" {}
@@ -20,9 +20,9 @@ locals {
 
 # --- Agent stores --------------------------------------------------------------
 
-# One customer-managed key for Memory and the client secret.
+# One customer-managed key for Memory and both secrets.
 resource "aws_kms_key" "this" {
-  description             = "${var.name} Memory and client secret"
+  description             = "${var.name} Memory and secrets"
   enable_key_rotation     = true
   deletion_window_in_days = 7
 }
@@ -48,6 +48,15 @@ resource "aws_bedrockagentcore_memory" "this" {
 resource "aws_secretsmanager_secret" "client" {
   name                    = "${var.resource_prefix}/cognito-client"
   description             = "Client secret of the agent's Cognito app client, set by the owner"
+  kms_key_id              = aws_kms_key.this.arn
+  recovery_window_in_days = 7
+}
+
+# Holds {"api_key": "..."} for the model API (OpenRouter), set by the owner
+# out of band like the client secret; the runtime reads it on first use.
+resource "aws_secretsmanager_secret" "model_key" {
+  name                    = "${var.resource_prefix}/model-api-key"
+  description             = "Model API key (OpenRouter) for the agent, set by the owner"
   kms_key_id              = aws_kms_key.this.arn
   recovery_window_in_days = 7
 }
@@ -144,12 +153,6 @@ resource "aws_iam_role_policy" "runtime" {
         Condition = { StringEquals = { "cloudwatch:namespace" = "bedrock-agentcore" } }
       },
       {
-        Sid      = "InvokePinnedModels"
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource = var.model_arns
-      },
-      {
         Sid      = "Checkpoints"
         Effect   = "Allow"
         Action   = ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:GetEvent", "bedrock-agentcore:ListEvents", "bedrock-agentcore:DeleteEvent", "bedrock-agentcore:ListSessions"]
@@ -182,6 +185,14 @@ resource "aws_iam_role_policy" "runtime" {
         Effect   = "Allow"
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_secretsmanager_secret.client.arn
+      },
+      {
+        # Models are reached over HTTPS through OpenRouter, so the role has
+        # no Bedrock grant; only the owner-set API key is read.
+        Sid      = "ReadModelKey"
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_secretsmanager_secret.model_key.arn
       },
       {
         Sid      = "UseAgentKey"
@@ -231,12 +242,14 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   }]
 
   environment_variables = {
-    JMAP_SESSION_URL    = var.jmap_session_url
-    OAUTH_PROVIDER_NAME = aws_bedrockagentcore_oauth2_credential_provider.cognito.name
-    OAUTH_SCOPES        = join(" ", var.oauth_scopes)
-    OAUTH_RETURN_URL    = var.oauth_return_url
-    MEMORY_ID           = aws_bedrockagentcore_memory.this.id
-    ASK_MODEL_ID        = var.ask_model_id
+    JMAP_SESSION_URL     = var.jmap_session_url
+    OAUTH_PROVIDER_NAME  = aws_bedrockagentcore_oauth2_credential_provider.cognito.name
+    OAUTH_SCOPES         = join(" ", var.oauth_scopes)
+    OAUTH_RETURN_URL     = var.oauth_return_url
+    MEMORY_ID            = aws_bedrockagentcore_memory.this.id
+    ASK_MODEL            = var.ask_model
+    MODEL_BASE_URL       = var.model_base_url
+    MODEL_KEY_SECRET_ARN = aws_secretsmanager_secret.model_key.arn
 
     # AgentCore Observability without content: ADOT's framework
     # instrumentors record prompts and completions whatever the capture

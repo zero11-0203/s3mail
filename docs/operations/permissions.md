@@ -242,14 +242,14 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | `WriteOwnLogs` | `logs:CreateLogStream`, `logs:PutLogEvents` | streams of those log groups | — |
 | `WriteTraces` | `xray:PutTraceSegments`, `xray:PutTelemetryRecords`, `xray:GetSamplingRules`, `xray:GetSamplingTargets` | `*` | — |
 | `PutMetrics` | `cloudwatch:PutMetricData` | `*` | `cloudwatch:namespace` = `bedrock-agentcore` |
-| `InvokePinnedModels` | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` | the pinned inference profile and the foundation models it routes to, by exact ARN | — |
 | `Checkpoints` | `bedrock-agentcore:CreateEvent`, `GetEvent`, `ListEvents`, `DeleteEvent`, `ListSessions` | the agent's one Memory | — |
 | `WorkloadToken` | `bedrock-agentcore:GetWorkloadAccessToken`, `GetWorkloadAccessTokenForUserId` | the default workload-identity directory and `s3mail_agent-*` identities | — |
 | `OwnerToken` | `bedrock-agentcore:GetResourceOauth2Token` | the default token vault, the `s3mail-agent-cognito` provider and those identities | — |
 | `ReadClientSecret` | `secretsmanager:GetSecretValue` | the `s3mail-agent/cognito-client` secret | — |
+| `ReadModelKey` | `secretsmanager:GetSecretValue` | the `s3mail-agent/model-api-key` secret (the OpenRouter key) | — |
 | `UseAgentKey` | `kms:Decrypt`, `kms:GenerateDataKey` | the agent's KMS key | `kms:ViaService` = Secrets Manager or AgentCore in the region |
 
-**Excluded:** any mail bucket, mail table, queue, KMS key other than the agent's, search index, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
+**Excluded:** any Bedrock model, mail bucket, mail table, queue, KMS key other than the agent's, search index, `GetWorkloadAccessTokenForJWT`, Gateway, Browser or Code Interpreter grant. Whether the token vault reads the secret, and Memory uses the key, through this role or through a service principal is confirmed at the A0 gate; drop the unused grants then.
 
 ## Resource policies
 

@@ -19,7 +19,9 @@ class Settings:
     oauth_scopes: tuple[str, ...]
     oauth_return_url: str
     memory_id: str
-    ask_model_id: str
+    ask_model: str
+    model_base_url: str
+    model_key_secret_arn: str
     max_steps: int = 12
     max_tool_calls: int = 24
     max_tokens: int = 200_000
@@ -35,7 +37,9 @@ class Settings:
             oauth_scopes=tuple(env["OAUTH_SCOPES"].split()),
             oauth_return_url=env["OAUTH_RETURN_URL"],
             memory_id=env["MEMORY_ID"],
-            ask_model_id=env["ASK_MODEL_ID"],
+            ask_model=env["ASK_MODEL"],
+            model_base_url=env["MODEL_BASE_URL"],
+            model_key_secret_arn=env["MODEL_KEY_SECRET_ARN"],
             max_steps=int(env.get("ASK_MAX_STEPS", "12")),
             max_tool_calls=int(env.get("ASK_MAX_TOOL_CALLS", "24")),
             max_tokens=int(env.get("ASK_MAX_TOKENS", "200000")),

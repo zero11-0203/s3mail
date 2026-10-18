@@ -24,7 +24,7 @@ from .config import OWNER_USER_ID, Settings
 from .graph import Limits, build_graph, run_ask
 from .identity import AuthorizationRequired, TokenSource, vault_token_source
 from .jmap import JmapAuthError, JmapClient, JmapError
-from .models import chat_model
+from .models import chat_model, read_api_key
 
 log = logging.getLogger("s3mail_agent")
 
@@ -109,10 +109,19 @@ def _runtime_handler() -> Handler:
     from langgraph_checkpoint_aws import AgentCoreMemorySaver
 
     settings = Settings.from_env()
+    keys: list[str] = []
+
+    def model() -> BaseChatModel:
+        # Read the key on first use, so the runtime starts before the owner
+        # has set it; one microVM serves one session, so caching is enough.
+        if not keys:
+            keys.append(read_api_key(settings.model_key_secret_arn, settings.region))
+        return chat_model(settings.ask_model, keys[0], settings.model_base_url)
+
     return Handler(
         settings,
         token_source=vault_token_source(settings),
-        model_factory=lambda: chat_model(settings.ask_model_id, settings.region),
+        model_factory=model,
         checkpointer=AgentCoreMemorySaver(settings.memory_id, region_name=settings.region),
     )
 

@@ -22,7 +22,9 @@ SETTINGS = Settings(
     oauth_scopes=("s3mail/mail.read",),
     oauth_return_url="http://localhost:8765/callback",
     memory_id="mem-1",
-    ask_model_id="model",
+    ask_model="openai/gpt-6.1-sol",
+    model_base_url="https://openrouter.ai/api/v1",
+    model_key_secret_arn="arn:aws:secretsmanager:us-east-1:111111111111:secret:model-key",  # noqa: S106 - an ARN, not a secret
 )
 SESSION = "cli-00000000-0000-4000-8000-000000000000"
 

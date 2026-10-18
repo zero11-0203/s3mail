@@ -8,6 +8,11 @@ output "client_secret_arn" {
   value       = aws_secretsmanager_secret.client.arn
 }
 
+output "model_key_secret_arn" {
+  description = "Secret the owner fills with {\"api_key\": ...} (the OpenRouter key)."
+  value       = aws_secretsmanager_secret.model_key.arn
+}
+
 output "memory_id" {
   value = aws_bedrockagentcore_memory.this.id
 }

@@ -18,7 +18,7 @@ The initial system receives and sends custom-domain mail, supports multiple alia
 
 Initial non-goals are multi-user hosting, a custom client or aerc fork, IMAP/SMTP submission compatibility, password/Basic/app-password authentication on mail endpoints, CalDAV/CardDAV and AI features. An IMAP gateway is a possible later extension.
 
-As a public portfolio project, the interoperable JMAP server is deliberately built in Go. Go covers the backend and terminal helpers; AWS provides managed transport, storage and compute; Terraform demonstrates repeatable provisioning. Tests, CI, a readable README and short demos are part of delivery. The repository must contain no secrets, account IDs, real addresses or personal mail: examples use `example.com`, and private Terraform values stay gitignored. Python, LangGraph and Bedrock are used only by the later, separately deployed [mail agent](specs/agent.md).
+As a public portfolio project, the interoperable JMAP server is deliberately built in Go. Go covers the backend and terminal helpers; AWS provides managed transport, storage and compute; Terraform demonstrates repeatable provisioning. Tests, CI, a readable README and short demos are part of delivery. The repository must contain no secrets, account IDs, real addresses or personal mail: examples use `example.com`, and private Terraform values stay gitignored. Python, LangGraph, AgentCore and an external model API (OpenRouter) are used only by the later, separately deployed [mail agent](specs/agent.md).
 
 ## Components and data flow
 

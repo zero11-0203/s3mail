@@ -29,14 +29,10 @@ variable "oauth_scopes" {
   type        = list(string)
 }
 
-variable "ask_model_id" {
-  description = "Pinned Bedrock inference profile id for questions."
+variable "ask_model" {
+  description = "Pinned OpenRouter model id for questions."
   type        = string
-}
-
-variable "model_arns" {
-  description = "Exact ARNs of that inference profile and the foundation models it routes to."
-  type        = list(string)
+  default     = "openai/gpt-6.1-sol"
 }
 
 variable "image_digest" {

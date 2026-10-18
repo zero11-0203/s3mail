@@ -47,8 +47,7 @@ module "agent" {
   oauth_issuer     = var.oauth_issuer
   oauth_client_id  = var.oauth_client_id
   oauth_scopes     = var.oauth_scopes
-  ask_model_id     = var.ask_model_id
-  model_arns       = var.model_arns
+  ask_model        = var.ask_model
   live_version     = var.live_version
 }
 

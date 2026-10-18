@@ -62,18 +62,20 @@ variable "oauth_return_url" {
   default     = "http://localhost:8765/callback"
 }
 
-variable "ask_model_id" {
-  description = "Pinned Bedrock inference profile id for questions."
+variable "ask_model" {
+  description = "Pinned OpenRouter model id for questions; a change is a release with an evaluation run."
   type        = string
+  default     = "openai/gpt-6.1-sol"
 }
 
-variable "model_arns" {
-  description = "Exact ARNs the runtime may invoke: the inference profile and the foundation models it routes to. No wildcards."
-  type        = list(string)
+variable "model_base_url" {
+  description = "OpenAI-compatible model API base URL."
+  type        = string
+  default     = "https://openrouter.ai/api/v1"
 
   validation {
-    condition     = length(var.model_arns) > 0 && alltrue([for a in var.model_arns : startswith(a, "arn:aws:bedrock:") && !strcontains(a, "*")])
-    error_message = "model_arns are exact Bedrock ARNs without wildcards."
+    condition     = startswith(var.model_base_url, "https://")
+    error_message = "model_base_url uses HTTPS."
   }
 }
 
