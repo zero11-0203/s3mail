@@ -1,6 +1,6 @@
 # Contributing to s3mail
 
-Thanks for your interest. s3mail is a preview-stage project with one maintainer, so small, focused changes are the easiest to review.
+Thanks for your interest. s3mail has one maintainer, so small, focused changes are the easiest to review.
 
 ## Before you start
 

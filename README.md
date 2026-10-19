@@ -4,8 +4,6 @@ English · [日本語](README.ja.md)
 
 **S**3 **S**ES **S**erverless mail: a self-hosted, single-owner email system on AWS with a Go [JMAP](https://jmap.io/) backend and an optional AI mail agent.
 
-> **Preview.** s3mail runs on a reference deployment with aerc, but it has not yet passed all of its acceptance checks. Try it on a spare domain or a subdomain before you move your everyday mail. See [limitations](#limitations).
-
 ## What it is
 
 s3mail lets one owner receive and send mail for a custom domain without running a mail server. It supports many addresses with one account and one unified inbox. AWS managed services handle transport, storage and compute; a Go service speaks the standard JMAP protocol so existing clients can connect.

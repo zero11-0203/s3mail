@@ -18,7 +18,7 @@ You can expect an acknowledgement within a week. Fixes land on `main`; there are
 
 ## Supported versions
 
-s3mail is a preview without tagged releases. Only the latest commit on `main` is supported. Deployments update by pulling `main`, rebuilding and applying Terraform ([deploy guide](docs/guides/deploy.md#updating)).
+s3mail has no tagged releases yet. Only the latest commit on `main` is supported. Deployments update by pulling `main`, rebuilding and applying Terraform ([deploy guide](docs/guides/deploy.md#updating)).
 
 ## Security model
 
