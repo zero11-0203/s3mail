@@ -1,6 +1,6 @@
 # s3mail
 
-**S**3 **S**ES **S**erverless mail: a self-hosted, single-owner email system on AWS with a Go [JMAP](https://jmap.io/) backend.
+**S**3 **S**ES **S**erverless mail: a self-hosted, single-owner email system on AWS with a Go [JMAP](https://jmap.io/) backend and an optional AI mail agent.
 
 > **Preview.** s3mail runs on a reference deployment with aerc, but it has not yet passed all of its acceptance checks. Try it on a spare domain or a subdomain before you move your everyday mail. See [status](#status).
 
@@ -14,7 +14,25 @@ s3mail lets one owner receive and send mail for a custom domain without running 
 - **Send:** a pluggable SMTP relay (SMTP2GO first) delivers outbound mail, with quotas and bounce handling. SES is used for receiving only.
 - **Search:** SQLite FTS5 index snapshots in S3, rebuildable from the source data, with optional semantic search.
 - **Sign in:** Cognito OAuth with a terminal helper, `mail-auth`, that hands short-lived tokens to your mail client.
-- **Clients:** [aerc](https://aerc-mail.org/) is the tested client. A browser webmail and an AI mail agent are optional, separately deployed parts.
+- **Clients:** [aerc](https://aerc-mail.org/) is the tested client. A browser webmail is an optional, separately deployed part.
+
+### Mail agent
+
+s3mail includes an optional AI assistant for your mailbox, built as a [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore:
+
+- **Ask:** answers questions about your mail from the command line, citing the emails it read.
+- **Triage:** sorts each new email by category and priority and flags what needs a reply, then sums it up in a daily digest.
+- **Draft:** writes reply drafts into your Drafts mailbox for you to edit and send.
+- **Act with approval:** proposes moves, archiving or sending a reviewed draft, and runs each one only after you approve it.
+
+```sh
+agent ask "What did the billing emails this month say?"
+agent draft <email id> "Accept, and suggest Thursday instead."
+agent act "Archive the newsletters from last week."   # prints an approval id
+agent approve <approval id>
+```
+
+The agent is just another JMAP client. It has its own OAuth client and scopes and no AWS access to mail storage, and each new kind of side effect is enabled only after its evaluation gate passes. Mail stays usable without it. When enabled, it sends mail excerpts to an external model API (OpenRouter). See the [agent spec](docs/specs/agent.md) and [`agent/`](agent/README.md).
 
 ![AWS architecture of s3mail](docs/diagrams/aws-mail-system.drawio.svg)
 
