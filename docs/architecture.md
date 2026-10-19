@@ -2,7 +2,7 @@
 
 [Documentation index](README.md)
 
-**Status:** implemented and running on a reference deployment for validation; not every acceptance check has passed yet (see the [project status](../README.md#status)).
+**Status:** implemented and running on a reference deployment for validation; not every acceptance check has passed yet (see the [limitations](../README.md#limitations)).
 
 ## Overview
 

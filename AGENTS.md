@@ -3,7 +3,7 @@
 ## Current state
 
 - The design is implemented: Go backend and helpers (`go/`), Terraform roots and modules (`infra/`) and the optional Python agent (`agent/`); `make check` runs the offline tests.
-- It runs on a reference deployment for validation, but not every acceptance check has passed; see the status section of `README.md`.
+- It runs on a reference deployment for validation, but not every acceptance check has passed; see the limitations in `README.md`.
 - Do not claim an acceptance check has passed without implementation evidence.
 - Start with `README.md`, then `docs/README.md` and `docs/architecture.md`.
 - Human contributors follow `CONTRIBUTING.md`; this file adds rules for coding agents.

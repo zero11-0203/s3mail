@@ -2,7 +2,7 @@
 
 [Project README](../README.md) · [Architecture](architecture.md) · [Deploy guide](guides/deploy.md)
 
-**Current state:** the Go backend and helpers, the Terraform roots and modules, and the optional Python mail agent are implemented, with offline tests run by `make check`. A reference deployment runs them for validation. No acceptance check counts as passed unless its owning spec records the evidence; see the [project status](../README.md#status).
+**Current state:** the Go backend and helpers, the Terraform roots and modules, and the optional Python mail agent are implemented, with offline tests run by `make check`. A reference deployment runs them for validation. No acceptance check counts as passed unless its owning spec records the evidence; see the [limitations](../README.md#limitations).
 
 Start with the [architecture](architecture.md) for the five-minute overview. To run your own copy, follow the [guides](#guides). Contributors should read [CONTRIBUTING.md](../CONTRIBUTING.md), and coding agents also [AGENTS.md](../AGENTS.md).
 

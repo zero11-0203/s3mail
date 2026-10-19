@@ -4,7 +4,7 @@
 
 This guide deploys s3mail into your own AWS account with the tooling that exists today: `make`, Terraform and the AWS CLI, run from your computer. Several steps are manual.
 
-> **Preview software.** s3mail has not yet passed all of its acceptance checks for primary mail ([project status](../../README.md#status)). Start with a spare domain or a subdomain (for example `mail.example.com`), not the domain your everyday mail uses.
+> **Preview software.** s3mail has not yet passed all of its acceptance checks for primary mail ([limitations](../../README.md#limitations)). Start with a spare domain or a subdomain (for example `mail.example.com`), not the domain your everyday mail uses.
 
 ## What you get
 

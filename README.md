@@ -2,7 +2,7 @@
 
 **S**3 **S**ES **S**erverless mail: a self-hosted, single-owner email system on AWS with a Go [JMAP](https://jmap.io/) backend and an optional AI mail agent.
 
-> **Preview.** s3mail runs on a reference deployment with aerc, but it has not yet passed all of its acceptance checks. Try it on a spare domain or a subdomain before you move your everyday mail. See [status](#status).
+> **Preview.** s3mail runs on a reference deployment with aerc, but it has not yet passed all of its acceptance checks. Try it on a spare domain or a subdomain before you move your everyday mail. See [limitations](#limitations).
 
 ## What it is
 
@@ -36,25 +36,14 @@ The agent is just another JMAP client. It has its own OAuth client and scopes an
 
 ![AWS architecture of s3mail](docs/diagrams/aws-mail-system.drawio.svg)
 
-## Status
-
-| Part | State |
-| --- | --- |
-| Core mail system: receiving, storage, JMAP, push, blobs, search and sending | Implemented with offline tests and running on a reference deployment with aerc. Many acceptance checks are so far covered by unit tests only; deployed failure-injection runs, the release canary and recovery rehearsals are not done. |
-| `mail-auth` and `mail-admin` CLIs | Implemented. `mail-auth` stores its session in the macOS Keychain, so it runs on macOS only for now. |
-| Semantic search | Implemented, off by default. Sends indexed mail text to OpenRouter when enabled. |
-| Mail agent (`agent/`, `infra/agent/`) | Stages A0–A3 and the A4 tools implemented; no stage gate has passed in full. Optional. |
-| Browser webmail (`webmail/`, `infra/webmail/`) | Terraform and image build exist; not deployed or validated. |
-| Deployment pipeline | CI runs offline checks only. Deploying is a local, saved-plan `terraform apply`; the CI deploy roles and post-deploy canary are designed but not built. |
-
-Each topic spec's **Acceptance checks** section is its release gate; see the [documentation index](docs/README.md).
-
 ## Limitations
 
 - **JMAP only:** no IMAP and no SMTP submission for other clients, so you need a JMAP client.
 - **One user per deployment,** and one deployment per AWS account and region: resource names are fixed.
 - **AWS-specific setup:** DNS must be hosted in a new Route 53 zone that s3mail creates, and s3mail activates its own SES receipt rule set, which replaces any active one in that region.
 - **SMTP2GO** is the only relay configured today.
+- **macOS only for `mail-auth`:** the sign-in helper stores its session in the macOS Keychain.
+- **Browser webmail is not validated:** its Terraform and image build exist, but it has not been deployed.
 - **Originals can never be deleted,** by design; deleting mail in a client only hides it.
 - **No backups:** DynamoDB holds mailbox metadata without point-in-time recovery. Losing it loses flags and folders; the originals remain.
 - **Password-only sign-in:** MFA is off in the current configuration, an accepted risk described in the [security spec](docs/specs/security.md#authentication-and-authorization).
