@@ -36,6 +36,7 @@ Measured Phase 0 results and implementation reviews; requirements stay in the ow
 - [Review of the agent fixes in e69137d](evidence/agent-fix-review-e69137d.md)
 - [Review of the agent fixes in ae72106](evidence/agent-fix-review-ae72106.md)
 - [Review of the agent fixes in 48a5b2e](evidence/agent-fix-review-48a5b2e.md)
+- [Review of the agent fixes in e14c353](evidence/agent-fix-review-e14c353.md)
 - [Phase 3 gate audit](evidence/phase3-gate-audit.md)
 
 ## Operations

@@ -17,8 +17,11 @@ cursor is written only over the value this run read. A digest delivered
 as mail is created under a lease on the window its cursor starts, carries a
 keyword naming that window, and records the cursor it covers before it is
 created: a retry finds the earlier email and advances only to that cursor,
-so mail arriving in between waits for the next digest. A preview (peek)
-carries no keyword, so it never stands in for the real digest.
+so mail arriving in between waits for the next digest. Every delivered
+window therefore moves the cursor: one that would end where it started
+fails with digest_retry instead, since its end would name it again. A
+preview (peek) carries no keyword, so it never stands in for the real
+digest.
 """
 
 from __future__ import annotations
@@ -65,10 +68,17 @@ DIGEST_SENDER = {"name": "s3mail agent", "email": "agent@s3mail.invalid"}
 DIGEST_KEYWORD = "$s3mail-digest-{}"
 # A delivering run's hold on its window; longer than a digest run takes.
 DIGEST_LEASE = timedelta(minutes=10)
+# Fallback queries per digest whose whole capped page was destroyed before
+# it could be read.
+QUERY_ATTEMPTS = 3
 
 log = logging.getLogger("s3mail_agent")
 # Mailboxes whose new emails are not news to the owner.
 SKIP_ROLES = frozenset({"drafts", "sent", "trash"})
+
+
+class DigestRetry(Exception):
+    """The run made no progress through its window; a later run retries."""
 
 
 def _iso(t: datetime) -> str:
@@ -148,44 +158,46 @@ async def _changes(jmap: JmapClient, cursor: Cursor | None, now: datetime) -> Wi
     }
     if cursor is not None and cursor.after_id:
         query |= {"anchor": cursor.after_id, "anchorOffset": 1}
-    try:
-        out = await jmap.call(
-            [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
-        )
-    except JmapMethodError as exc:
-        if exc.type != "anchorNotFound":
-            raise
-        # The anchor was destroyed: resume from its time, listing that
-        # second's emails again rather than skipping any.
-        query = {k: v for k, v in query.items() if not k.startswith("anchor")}
-        out = await jmap.call(
-            [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
-        )
-    # The state before this page: from the late-mail check when there was
-    # one, so nothing created after it goes unchecked.
-    state = since or out["c0"]["state"]
-    page = out["c1"]["ids"]
-    # Without its anchor the query can list late mail of the anchor's second.
-    seen = set(late)
-    ids = late + [i for i in page if i not in seen]
-    total = int(out["c1"].get("total") or len(page))
-    if not page or int(out["c1"].get("position") or 0) + len(page) >= total:
-        return Window(ids, 0, state)
-    # Truncated: the next digest resumes after the last listed email that
-    # still exists, first checking the mail created since this state. Any
-    # after it were destroyed meanwhile, so none is listed twice.
-    last = await _headers(jmap, page[-1:], ["id", "receivedAt"])
-    if not last or not last[0].get("receivedAt"):
-        found = {e["id"]: e for e in await _headers(jmap, page, ["id", "receivedAt"])}
-        last = [found[i] for i in reversed(page) if found.get(i, {}).get("receivedAt")][:1]
-    if last:
-        return Window(ids, None, state, last[0]["receivedAt"], last[0]["id"])
-    # The whole page was destroyed meanwhile. Keep the earlier anchor; with
-    # none, store no state either, since a state without an anchor would
-    # read as a finished query: the next digest queries from this time again.
-    if cursor is not None and cursor.after_id:
-        return Window(ids, None, state, after, cursor.after_id)
-    return Window(ids, None, None, after)
+    for _ in range(QUERY_ATTEMPTS):
+        try:
+            out = await jmap.call(
+                [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
+            )
+        except JmapMethodError as exc:
+            if exc.type != "anchorNotFound":
+                raise
+            # The anchor was destroyed: resume from its time, listing that
+            # second's emails again rather than skipping any.
+            query = {k: v for k, v in query.items() if not k.startswith("anchor")}
+            out = await jmap.call(
+                [("Email/get", {"ids": [], "properties": ["id"]}), ("Email/query", query)]
+            )
+        # The state before this page: from the late-mail check when there
+        # was one, so nothing created after it goes unchecked.
+        state = since or out["c0"]["state"]
+        page = out["c1"]["ids"]
+        # Without its anchor the query can list late mail of the anchor's
+        # second.
+        seen = set(late)
+        ids = late + [i for i in page if i not in seen]
+        total = int(out["c1"].get("total") or len(page))
+        if not page or int(out["c1"].get("position") or 0) + len(page) >= total:
+            return Window(ids, 0, state)
+        # Truncated: the next digest resumes after the last listed email
+        # that still exists, first checking the mail created since this
+        # state. Any after it were destroyed meanwhile, so none is listed
+        # twice.
+        last = await _headers(jmap, page[-1:], ["id", "receivedAt"])
+        if not last or not last[0].get("receivedAt"):
+            found = {e["id"]: e for e in await _headers(jmap, page, ["id", "receivedAt"])}
+            last = [found[i] for i in reversed(page) if found.get(i, {}).get("receivedAt")][:1]
+        if last:
+            return Window(ids, None, state, last[0]["receivedAt"], last[0]["id"])
+        # The whole page was destroyed meanwhile: query again from the same
+        # place, which now starts at the mail that survived.
+    # A window that cannot pass its destroyed pages makes no progress, and
+    # its end would name the same window again: fail without delivering.
+    raise DigestRetry
 
 
 async def _behind(jmap: JmapClient, cursor: Cursor) -> tuple[list[str], str, bool]:
@@ -445,7 +457,15 @@ async def run_digest(
             if not await table.set_cursor(end, cursor):
                 reused["cursor"] = "already_advanced"
             return reused
-    window = await _changes(jmap, cursor, now)
+    try:
+        window = await _changes(jmap, cursor, now)
+    except DigestRetry:
+        return {"status": "error", "error": "digest_retry"}
+    end = Cursor(window.state, window.at or _iso(now), window.after_id)
+    if deliver == "mail" and not peek and end == cursor:
+        # Delivered, this window's end would name it again, and every later
+        # run would reuse this digest instead of reading on.
+        return {"status": "error", "error": "digest_retry"}
     boxes = await mailbox_index(jmap)
     roles = boxes.roles
     # Drafts, sent and trash are not news, nor are the agent's own digests.
@@ -489,7 +509,6 @@ async def run_digest(
         "model_calls": meter.calls,
         "tokens": meter.tokens,
     }
-    end = Cursor(window.state, window.at or _iso(now), window.after_id)
     if deliver == "mail":
         if not peek:
             # Recorded first, so a retry that finds this email knows its end.

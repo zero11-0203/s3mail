@@ -259,6 +259,104 @@ async def test_mail_destroyed_at_a_capped_page_end_keeps_the_query_going(
     assert table.cursor.state is not None
 
 
+def destroy_pages(
+    s: MailServer, monkeypatch: pytest.MonkeyPatch, pages: list[bool]
+) -> tuple[set[str], list[bool]]:
+    """Destroy fallback queries' whole pages before they are read: pages
+    holds one entry per coming query, True to destroy its page, and tests
+    may refill it between runs."""
+    real = s.method
+    destroyed: set[str] = set()
+
+    def method(name: str, args: dict[str, Any]) -> Any:
+        out = real(name, args)
+        fallback = "after" in (args.get("filter") or {})
+        if name == "Email/query" and fallback and pages and pages.pop(0):
+            destroyed.update(out["ids"])
+            s.mailbox = [e for e in s.mailbox if e["id"] not in destroyed]
+            s.touch()
+        return out
+
+    monkeypatch.setattr(s, "method", method)
+    return destroyed, pages
+
+
+def mailed(s: MailServer, result: dict[str, Any]) -> list[str]:
+    email = s.by_id(result["email_id"])
+    assert email is not None
+    return bulk(email["body"])
+
+
+async def test_destroyed_pages_never_stall_mailed_digests(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+    for i in range(950):
+        s.deliver(
+            message(
+                f"N{i:03d}", f"TN{i}", "b@example.org", f"Bulk {i}", "2026-10-17T13:00:00Z", "b"
+            )
+        )
+    table.cursor = Cursor("expired-state", "2026-10-17T07:00:00Z")
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    destroyed, pages = destroy_pages(s, monkeypatch, [])
+    listed: list[str] = []
+    for run in range(4):
+        # The first query of each of the first two digests loses its whole
+        # page; mail arrives once the deletions stop.
+        pages[:] = [True] if run < 2 else []
+        if run == 2:
+            s.deliver(
+                message("NEW", "TNEW", "b@example.org", "Bulk new", "2026-10-18T06:00:00Z", "b")
+            )
+        table.leases.clear()  # each run comes after the last one's lease
+        result = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+        assert result["status"] == "ok" and "reused" not in result
+        listed += mailed(s, result)
+    survivors = [f"N{i:03d}" for i in range(950) if f"N{i:03d}" not in destroyed]
+    assert len(destroyed) == 600 and sorted(listed) == sorted(["NEW", *survivors])
+
+
+async def test_a_window_that_cannot_pass_destroyed_pages_is_retried_later(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+    for i in range(1000):
+        s.deliver(
+            message(
+                f"N{i:03d}", f"TN{i}", "b@example.org", f"Bulk {i}", "2026-10-17T13:00:00Z", "b"
+            )
+        )
+    start = Cursor("expired-state", "2026-10-17T07:00:00Z")
+    table.cursor = start
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    destroyed, _ = destroy_pages(s, monkeypatch, [True] * digest.QUERY_ATTEMPTS)
+    result = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+    assert result == {"status": "error", "error": "digest_retry"}
+    assert table.cursor == start and not any(n == "Email/set" for n, _ in s.writes)
+    table.leases.clear()
+    again = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+    assert again["status"] == "ok" and "reused" not in again
+    survivors = [f"N{i:03d}" for i in range(1000) if f"N{i:03d}" not in destroyed]
+    assert len(destroyed) == 900 and sorted(mailed(s, again)) == survivors
+
+
+async def test_a_mailed_window_ending_where_it_started_is_not_delivered(
+    scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, table = setup()
+    table.cursor = Cursor(None, "2026-10-17T07:00:00Z")
+
+    async def stuck(*_: Any) -> digest.Window:
+        return digest.Window([], None, None, "2026-10-17T07:00:00Z")
+
+    monkeypatch.setattr(digest, "_changes", stuck)
+    jmap = client(s, writes=frozenset({EMAIL_SET, MAILBOX_SET}))
+    result = await run_digest(jmap, scripted(), table, deliver="mail", now=NOW)
+    assert result == {"status": "error", "error": "digest_retry"}
+    assert not any(n == "Email/set" for n, _ in s.writes) and table.ends == {}
+
+
 async def test_a_change_page_budget_bounds_the_work(
     scripted: ScriptFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
