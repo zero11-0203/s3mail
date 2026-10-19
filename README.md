@@ -16,6 +16,8 @@ s3mail lets one owner receive and send mail for a custom domain without running 
 - **Sign in:** Cognito OAuth with a terminal helper, `mail-auth`, that hands short-lived tokens to your mail client.
 - **Clients:** [aerc](https://aerc-mail.org/) is the tested client. A browser webmail is an optional, separately deployed part.
 
+**Why a relay instead of SES for sending:** SES in a new AWS account starts in the [sandbox](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html), where it sends only to verified addresses and domains, and at most 200 messages per 24 hours. Sending to anyone requires applying to AWS for production access, a manual review that is not guaranteed to succeed. A third-party relay avoids that gate, and because the relay is pluggable, another one can be added later.
+
 ### Mail agent
 
 s3mail includes an optional AI assistant for your mailbox, built as a [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore:
