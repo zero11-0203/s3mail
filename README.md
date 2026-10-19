@@ -34,7 +34,7 @@ agent act "Archive the newsletters from last week."   # prints an approval id
 agent approve <approval id>
 ```
 
-The agent is just another JMAP client. It has its own OAuth client and scopes and no AWS access to mail storage, and each new kind of side effect is enabled only after its evaluation gate passes. Mail stays usable without it. When enabled, it sends mail excerpts to an external model API (OpenRouter). See the [agent spec](docs/specs/agent.md) and [`agent/`](agent/README.md).
+The agent is just another JMAP client. It has its own OAuth client and scopes and no AWS access to mail storage. Mail stays usable without it. When enabled, it sends mail excerpts to an external model API (OpenRouter). See the [agent spec](docs/specs/agent.md) and [`agent/`](agent/README.md).
 
 ![AWS architecture of s3mail](docs/diagrams/aws-mail-system.drawio.svg)
 

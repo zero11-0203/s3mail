@@ -36,7 +36,7 @@ agent act "先週のニュースレターをアーカイブして。"   # 承認
 agent approve <approval id>
 ```
 
-エージェントは、ほかのクライアントと同じ 1 つの JMAP クライアントにすぎません。専用の OAuth クライアントとスコープを持ち、メールの保存先への AWS アクセス権は持ちません。新しい種類の副作用は、それぞれの評価ゲートを通過してから有効になります。エージェントがなくてもメールはそのまま使えます。有効にすると、メールの抜粋を外部のモデル API（OpenRouter）に送信します。詳しくは[エージェント仕様](docs/specs/agent.md)と [`agent/`](agent/README.md) を参照してください。
+エージェントは、ほかのクライアントと同じ 1 つの JMAP クライアントにすぎません。専用の OAuth クライアントとスコープを持ち、メールの保存先への AWS アクセス権は持ちません。エージェントがなくてもメールはそのまま使えます。有効にすると、メールの抜粋を外部のモデル API（OpenRouter）に送信します。詳しくは[エージェント仕様](docs/specs/agent.md)と [`agent/`](agent/README.md) を参照してください。
 
 ![s3mail の AWS アーキテクチャ](docs/diagrams/aws-mail-system.drawio.svg)
 
