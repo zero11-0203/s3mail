@@ -281,7 +281,8 @@ func (c *Client) Login(ctx context.Context, open func(string), force bool) (bool
 // Listen binds the loopback addresses of the return URL, never all
 // interfaces: 127.0.0.1, and ::1 where the host has it. Browsers try ::1
 // first for localhost, so another program on [::]:<port> (a local database,
-// say) would otherwise receive the redirect; the more specific ::1 bind wins.
+// say) would otherwise receive the redirect. On macOS the more specific ::1
+// bind wins; Linux refuses it beside a wildcard bind, so ::1 is skipped there.
 func Listen(returnURL string) (net.Listener, *url.URL, error) {
 	u, err := url.Parse(returnURL)
 	if err != nil {

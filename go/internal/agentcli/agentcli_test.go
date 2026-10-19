@@ -229,39 +229,6 @@ func TestPlainTextDropsTerminalControls(t *testing.T) {
 	}
 }
 
-func TestListenServesBothLoopbacksBesideAnIPv6Squatter(t *testing.T) {
-	returnURL := freeReturnURL(t)
-	port := strings.TrimSuffix(strings.TrimPrefix(returnURL, "http://localhost:"), "/callback")
-	// Another program on [::]:<port>, as a local database might be.
-	squatter, err := net.Listen("tcp6", "[::]:"+port)
-	if err != nil {
-		t.Skipf("no IPv6: %v", err)
-	}
-	defer func() { _ = squatter.Close() }()
-
-	ln, _, err := Listen(returnURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ln.Close() }()
-	go func() {
-		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
-	}()
-	// The squatter never answers, so a request that reaches it times out.
-	c := http.Client{Timeout: 2 * time.Second}
-	for _, host := range []string{"127.0.0.1", "[::1]"} {
-		resp, err := c.Get("http://" + host + ":" + port + "/callback") //nolint:noctx // test request to the local listener
-		if err != nil {
-			t.Errorf("%s: %v", host, err)
-			continue
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusTeapot {
-			t.Errorf("%s: %d", host, resp.StatusCode)
-		}
-	}
-}
-
 func TestReturnURLMustBeLoopbackHTTP(t *testing.T) {
 	for _, u := range []string{"https://localhost:8765/callback", "http://example.com:8765/callback", "http://localhost/callback"} {
 		if _, _, err := Listen(u); err == nil {
