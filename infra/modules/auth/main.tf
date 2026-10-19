@@ -1,7 +1,7 @@
 # One Cognito user pool and one user (docs/specs/security.md#authentication-and-authorization):
-# admin-created only, password sign-in without MFA (owner decision), OAuth bearer tokens as the only API
+# admin-created only, password sign-in without MFA (accepted risk), OAuth bearer tokens as the only API
 # credential. App clients are public (no secret) and use code + PKCE, except
-# the later mail agent's one confidential client.
+# the optional mail agent's one confidential client.
 
 data "aws_region" "current" {}
 
@@ -106,7 +106,7 @@ resource "aws_cognito_user_pool_client" "terminal" {
   }
 }
 
-# Phase 4 webmail, registered only when its callbacks are set
+# Browser webmail, registered only when its callbacks are set
 # (docs/specs/clients.md#browser-hosting-and-client-safety). Its server
 # exchanges the code and keeps the rotated refresh token in an httpOnly
 # cookie; only the s3mail scopes are granted, so no ID token is issued.

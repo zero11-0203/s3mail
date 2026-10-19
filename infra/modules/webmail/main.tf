@@ -1,4 +1,4 @@
-# Phase 4 webmail (docs/specs/clients.md#browser-hosting-and-client-safety):
+# Browser webmail (docs/specs/clients.md#browser-hosting-and-client-safety):
 # the pinned upstream Next.js server as a Lambda container image, fronted by
 # AWS Lambda Web Adapter, behind its own Regional REST API on the webmail
 # custom domain. Mail is reached only through the user's OAuth session at the

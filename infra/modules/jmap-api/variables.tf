@@ -125,7 +125,7 @@ variable "webhook" {
 }
 
 variable "cors_origin" {
-  description = "The one browser origin allowed to call the API (the Phase 4 webmail, e.g. https://webmail.example.com). Null disables CORS."
+  description = "The one browser origin allowed to call the API (the browser webmail, e.g. https://webmail.example.com). Null disables CORS."
   type        = string
   default     = null
 

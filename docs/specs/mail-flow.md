@@ -1,10 +1,10 @@
 # Mail receipt and submission
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns SMTP envelope routing, accepted-message disposition, bounded MIME processing, relay delivery and bounce handling. Transaction mechanics live in [storage and sync](storage-sync.md).
+**Status: implemented and deployed for validation; not every acceptance check below has passed.** See [current outbound implementation](#current-outbound-implementation). Owns SMTP envelope routing, accepted-message disposition, bounded MIME processing, relay delivery and bounce handling. Transaction mechanics live in [storage and sync](storage-sync.md).
 
 ## Required behavior and invariants
 
@@ -41,7 +41,7 @@ Important implementation details:
 
 - Publish the inbound SES MX record ([DNS](../operations/deployment.md#dns-and-region)).
 - The SES S3 action stores MIME and publishes its receipt notification to SNS; subscribe SQS with producer/account restrictions and notification delivery failure handling. Persist the full required envelope recipient set, matched local recipients, envelope sender, receipt timestamp and SES verdicts with the S3 location. MIME headers are not the authority for envelope routing. Use [the SES receipt notification schema](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-notifications-contents.html); the separate full-message SNS action and bare S3 object events are not this path.
-- Store raw MIME durably under SSE-S3 or an explicitly configured bucket SSE-KMS key and least-privilege IAM. Do not accidentally select SES's optional client-side encryption mode when configuring ordinary S3 server-side encryption. Keep version IDs in blob/receipt references; the S3-action notification carries only the object key, so ingestion resolves the version of that unique key before recording it ([evidence](../evidence/phase0-ses-receiving.md#findings)). SES delivers originals into the dedicated permanent-original bucket; parsed/extracted data goes to disposable storage. The [original retention policy](../operations/recovery.md#original-mail-retention) also applies to failed ingestion and canaries.
+- Store raw MIME durably under SSE-S3 or an explicitly configured bucket SSE-KMS key and least-privilege IAM. Do not accidentally select SES's optional client-side encryption mode when configuring ordinary S3 server-side encryption. Keep version IDs in blob/receipt references; the S3-action notification carries only the object key, so ingestion resolves the version of that unique key before recording it. SES delivers originals into the dedicated permanent-original bucket; parsed/extracted data goes to disposable storage. The [original retention policy](../operations/recovery.md#original-mail-retention) also applies to failed ingestion and canaries.
 - Configure retries, a dead-letter queue, and idempotent ingestion: events may be delivered more than once (see [durable receipt/outbox handling](storage-sync.md#idempotency-and-durable-work)).
 - Parse MIME parts, attachments, subject, sender, dates and message identifiers, retaining both message headers and SMTP envelope metadata. Decode all text to UTF-8 from its declared charset and record the detected language.
 - Resolve aliases against the registry, apply the disposition policy below, and commit metadata, receipt marker, JMAP state and outbox work in the [storage transaction contract](storage-sync.md#dynamodb-storage-and-consistency-contract).
@@ -103,8 +103,8 @@ Adapters:
 
 | Adapter | Status | Notes |
 | --- | --- | --- |
-| `smtp`, configured for SMTP2GO | **Planned; initial production relay** | Authenticated SMTP submission (587 with required STARTTLS or 465 TLS), certificate/hostname verification required. Provider limits and recipient accounting are verified during Phase 0 and stored as configuration |
-| `fake` | Planned, tests only | In-memory adapter used by the local test harness; also proves the interface is not shaped around SMTP |
+| `smtp`, configured for SMTP2GO | **Implemented; first production relay** | Authenticated SMTP submission (587 with required STARTTLS or 465 TLS), certificate/hostname verification required. Provider limits and recipient accounting are verified before cutover and stored as configuration (`relay_quota`) |
+| `fake` | Implemented, tests only | In-memory adapter used by tests and the planned local test harness; also proves the interface is not shaped around SMTP |
 | SES API, other providers | Not implemented | Can be added later as new adapters without changes to JMAP code or stored mail |
 
 SMTP2GO specifics:
@@ -143,7 +143,7 @@ What is deployed (`go/internal/send`, `go/internal/relay`, `go/internal/dispatch
 - **Tracing:** a send is one X-Ray trace from `EmailSubmission/set` through the outbox, dispatcher, submission queue and worker to an `SMTP submit` span ([monitoring](../operations/monitoring.md#current-implementation)).
 - **Suppressions:** a report for a suppressed recipient (`reject`) or a hard bounce sets `no`. The owner views and clears SMTP2GO's suppression list in the SMTP2GO dashboard; s3mail holds no SMTP2GO API key, and JMAP does not show suppressions.
 - **Delivery markers** expire through the table TTL 90 days after they are written; a later replay cannot undo a final state.
-- **Not yet:** alarms for DLQs and unknown acceptance (the owner chose none; the worker and sweep log `outcome: acceptance_unknown`); a diagnostic attempt capability. The pause check logs the parameter value it read whenever it pauses sending.
+- **Not yet:** alarms for DLQs and unknown acceptance (none by default; the worker and sweep log `outcome: acceptance_unknown`); a diagnostic attempt capability. The pause check logs the parameter value it read whenever it pauses sending.
 
 ## Failure handling
 

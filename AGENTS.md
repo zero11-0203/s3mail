@@ -2,11 +2,11 @@
 
 ## Current state
 
-- The design is implemented in part: Go backend and helpers (`go/`), Terraform roots and modules (`infra/`) and the optional Python agent (`agent/`); `make check` runs the tests.
-- Parts are deployed for validation; phase status lives in `docs/roadmap.md`.
-- Do not claim a design gate has passed without implementation evidence.
+- The design is implemented: Go backend and helpers (`go/`), Terraform roots and modules (`infra/`) and the optional Python agent (`agent/`); `make check` runs the offline tests.
+- It runs on a reference deployment for validation, but not every acceptance check has passed; see the status section of `README.md`.
+- Do not claim an acceptance check has passed without implementation evidence.
 - Start with `README.md`, then `docs/README.md` and `docs/architecture.md`.
-- Read `docs/roadmap.md` before choosing implementation scope or priority.
+- Human contributors follow `CONTRIBUTING.md`; this file adds rules for coding agents.
 
 ## Task routing
 
@@ -23,33 +23,34 @@ Read the relevant owning document and its acceptance checks before making change
 | DNS, Terraform, CI/CD, shared test strategy | `docs/operations/deployment.md` |
 | Retention, GC, rebuilds, owner recovery | `docs/operations/recovery.md` |
 | Logs, metrics, alarms, tracing, budgets | `docs/operations/monitoring.md` |
-| Stages, cutover prerequisites, release gates | `docs/roadmap.md` |
+| Deployed IAM roles and resource-policy grants | `docs/operations/permissions.md` |
 | Mail agent: LangGraph, AgentCore, agent tools and evals | `docs/specs/agent.md` |
+| Deploying and using s3mail (operator guides) | `docs/guides/` |
 | AWS architecture diagram and editing workflow | `docs/diagrams/README.md` |
 
 ## Scope and priorities
 
 - Build and test with aerc plus CLI/protocol helpers first.
-- Browser webmail is lower priority, deferred to Phase 4.
-- Browser-only checks do not block core Phases 0–3 or CLI-based cutover.
-- The later browser host is on-demand Lambda with Lambda Web Adapter.
-- The mail agent (`agent/`, `infra/agent/`) is optional and starts after
-  Phase 3 cutover; mail work never depends on it. Keep it a JMAP client:
-  no agent IAM access to mail storage and no agent-specific server shortcuts.
+- Browser webmail is lower priority and deferred; it is not yet validated.
+- Browser-only checks do not block the CLI-based core system or primary-mail cutover.
+- The browser host is on-demand Lambda with Lambda Web Adapter.
+- The mail agent (`agent/`, `infra/agent/`) is optional; mail work never
+  depends on it. Keep it a JMAP client: no agent IAM access to mail storage
+  and no agent-specific server shortcuts.
 
 ## Implementation constraints
 
 - Preserve the owning spec's invariants and failure behavior.
 - Use least privilege for every created IAM role, including proofs of concept,
-  CI, maintenance, recovery and later webmail; consult the security spec.
+  CI, maintenance, recovery and webmail; consult the security spec.
 - Treat DynamoDB/S3 source data as authoritative; search is rebuildable.
 - Preserve atomic state/history/outbox and replay/deletion protections.
 - Never delete original S3 mail objects or their versions, including on Email
   destruction, replay or GC. Enable versioning, omit original-delete IAM grants
   and keep expiration/cleanup limited to disposable data; follow the recovery spec.
-- Do not add backups in the current personal-use scope: no duplicate mail bucket,
-  scheduled export jobs, AWS Backup plans or DynamoDB PITR/on-demand backups.
-  Preserve original S3 versioning and document possible metadata loss.
+- Do not add backups in the current scope: no duplicate mail bucket, scheduled
+  export jobs, AWS Backup plans or DynamoDB PITR/on-demand backups. Preserve
+  original S3 versioning and document possible metadata loss.
 - Never automatically resend a submission with unknown relay acceptance.
 - Do not weaken shared protocol/authentication contracts for one client.
 - Keep secrets, account IDs, real addresses and personal mail out of source,
@@ -62,7 +63,8 @@ Read the relevant owning document and its acceptance checks before making change
 - A requirement has one canonical home; link to it elsewhere.
 - Update the relevant design, failure behavior and acceptance checks together.
 - Keep architecture concise; detailed thresholds and contracts belong in specs.
-- Keep priorities and release-gate routing in the roadmap.
+- Keep the operator guides in `docs/guides/` in step with variables, outputs
+  and commands they describe.
 - Keep `docs/diagrams/aws-mail-system.drawio.svg` current in the same change
   whenever AWS components, integrations, data flows, authorization boundaries,
   hosting or deployment stages change. Review it for related spec/IaC changes;
@@ -79,12 +81,13 @@ Read the relevant owning document and its acceptance checks before making change
 
 ## Validation and reporting
 
-- Use trunk-based development: commit directly to `main` (no feature branches);
-  run `make check` before pushing (needs Go, Terraform, golangci-lint and gitleaks;
-  CI runs the same checks in `.github/workflows/checks.yml`).
-
+- Maintainers use trunk-based development and commit directly to `main`;
+  external contributions arrive as pull requests from forks.
+- Run `make check` before pushing or opening a pull request (needs Go,
+  Terraform, golangci-lint, gitleaks and uv; CI runs the same checks in
+  `.github/workflows/checks.yml`).
 - Follow the owning topic's acceptance checks and deployment validation tiers.
-- Use the actual repository toolchain once it exists; do not invent runnable
-  commands from examples of future tooling in the design.
+- Use the actual repository toolchain; do not invent runnable commands from
+  descriptions of planned tooling in the design.
 - For documentation-only edits, check links, headings and preserved requirements.
 - Report what changed, what was checked and any remaining validation limits.

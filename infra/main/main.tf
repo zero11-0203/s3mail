@@ -2,18 +2,6 @@
 # mail-store, mail-inbound, mail-outbound, relay-smtp2go, jmap-api, search,
 # maintenance, auth and ops modules; see docs/operations/deployment.md.
 
-# Phase 0 streaming spike; temporary and disabled by default.
-module "spike_stream" {
-  source = "../modules/spike-stream"
-  count  = var.spike_stream_enabled ? 1 : 0
-
-  lambda_zip     = var.spike_stream_zip
-  authorizer_zip = var.spike_authorizer_zip
-  issuer         = module.auth.issuer
-  client_ids     = [module.auth.terminal_client_id]
-  scopes         = module.auth.scopes
-}
-
 # The hosted zone for the whole domain. Modules add dns_records outputs to
 # this list as they are introduced (mail-inbound, relay-*, jmap-api).
 module "dns" {
@@ -46,7 +34,7 @@ resource "aws_ses_domain_identity_verification" "inbound" {
   depends_on = [module.dns]
 }
 
-# Phase 4 webmail registration: its Cognito app client, authorizer
+# Browser webmail registration: its Cognito app client, authorizer
 # allowlist entry and CORS origin. The webmail itself is deployed
 # separately by infra/webmail and needs nothing else from this root.
 locals {

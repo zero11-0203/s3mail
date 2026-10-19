@@ -57,13 +57,15 @@ terraform.rc
 # Backend settings name the account-specific state bucket
 infra/backend.hcl
 
-# Phase 4 webmail (Node.js)
+# Browser webmail (Node.js)
 node_modules/
 .next/
 
 # Local Claude Code worktrees: nested checkouts that git add would stage
 # as gitlinks
 .claude/worktrees/
+# Per-user Claude Code permissions
+.claude/settings.local.json
 
 # Editors and OS
 .DS_Store

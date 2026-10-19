@@ -8,7 +8,8 @@ import (
 	"github.com/zero11-0203/s3mail/go/internal/mailparse"
 )
 
-// Regression tests for docs/evidence/jmap-rfc-review.md.
+// Regression tests for an RFC 8620/8621 conformance review; the F and
+// C numbers name its findings.
 
 // F3: the response limit appears exactly when the server set or changed it.
 func TestQueryLimitReported(t *testing.T) {

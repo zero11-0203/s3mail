@@ -1,17 +1,17 @@
 # Retention and recovery
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns permanent original retention, mailbox deletion, derived-data GC and the owner rebuild procedure. Search-specific lifecycle settings live in [search](../specs/search.md).
+**Status: partly implemented.** Original retention, Email destruction, the [derived-data collector](#derived-data-collector) and `mail-admin rebuild-derived` are implemented and deployed; the [rebuild runbook](#rebuild-runbook) is documented but not rehearsed. Owns permanent original retention, mailbox deletion, derived-data GC and the owner rebuild procedure. Search-specific lifecycle settings live in [search](../specs/search.md).
 
 ## Required behavior and invariants
 
 - Original S3 mail objects and every version are retained permanently, including after mailbox deletion.
 - Deletion removes the active Email and its normal blob/snippet access; it is not erasure of the archived original.
 - Garbage collection applies only to temporary or derived data, never originals.
-- No backup system is included in the current personal-use scope; metadata loss may be permanent.
+- No backup system is included in the current scope; metadata loss may be permanent.
 - Rebuild never implicitly authorizes a send or bulk re-import; surviving deletion evidence is respected.
 
 ## Design
@@ -61,7 +61,7 @@ What is deployed (`go/internal/gc`, `infra/modules/maintenance`): the `s3mail-gc
 <a id="backup-and-export"></a>
 ### Recovery without backups
 
-No backups are configured for the current personal-use scope: no additional S3 mail copies, backup bucket, scheduled metadata/content exports, AWS Backup plans, DynamoDB PITR or on-demand DynamoDB backups. Keep the existing original-object versioning and no-delete policies. Built-in S3 redundancy is the storage durability mechanism; there is no independent disaster-recovery copy.
+No backups are configured in the current scope: no additional S3 mail copies, backup bucket, scheduled metadata/content exports, AWS Backup plans, DynamoDB PITR or on-demand DynamoDB backups. Keep the existing original-object versioning and no-delete policies. Built-in S3 redundancy is the storage durability mechanism; there is no independent disaster-recovery copy.
 
 **Accepted limitation:** original MIME can be read again, but it does not fully reconstruct mailbox state. Loss or corruption of DynamoDB can permanently lose read flags, folder membership, aliases/account mappings, deletion decisions, SMTP envelope recipients and submission/attempt evidence. Retained original bytes do not imply a recoverable metadata snapshot. No point-in-time recovery or metadata-loss target is promised in this scope.
 
@@ -79,7 +79,7 @@ When metadata remains intact, rebuild disposable parsed data, counters/listings 
 5. Treat active or uncertain sends as unresolved. Retained frozen MIME is not authorization to send again. Never dispatch reconstructed submission/outbox work or retry historical sends automatically; reconcile surviving attempt records with relay evidence and require an explicit new owner submission where needed.
 6. Rebuild a clean search index from the resulting live account, run synthetic positive acceptance, then resume ingestion. Unpause sending separately after owner reconciliation. Record lost metadata and any arrivals that could not be reconciled.
 
-The owner chose not to rehearse this rebuild or create a separate owner-recovery role; the procedure is documented but untested, and the owner's admin session is the recovery identity. This procedure recovers what remains available; it does not promise restoration of lost metadata or an earlier mailbox state.
+This rebuild has not been rehearsed, and no separate owner-recovery role is created; the procedure is documented but untested, and the owner's admin session is the recovery identity. This procedure recovers what remains available; it does not promise restoration of lost metadata or an earlier mailbox state.
 
 ## Acceptance checks
 

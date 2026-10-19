@@ -222,7 +222,7 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 
 ### `s3mail-webmail` (Lambda execution role)
 
-- **Module:** `infra/modules/webmail`, applied only by the separate `infra/webmail` root (Phase 4).
+- **Module:** `infra/modules/webmail`, applied only by the separate `infra/webmail` root (deferred webmail).
 - **Purpose:** run the pinned webmail server behind Lambda Web Adapter ([browser hosting](../specs/clients.md#browser-hosting-and-client-safety)). It exchanges OAuth codes and refresh tokens with Cognito over public HTTPS; mail is reached only from the browser with the user's token.
 
 | Statement | Actions | Resource | Condition |
@@ -296,14 +296,13 @@ It has no grant on the original-mail or blob buckets, cannot read or write objec
 | Agent triage DLQ | — | Redrive allowed only from the triage queue | — |
 | `s3mail-agent-trigger` (agent A2, optional) | `events.amazonaws.com` | `lambda:InvokeFunction` | source ARN = the `s3mail-agent-digest` schedule rule |
 | `s3mail-authorizer` | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<api>/authorizers/<bearer>` |
-| `s3mail-webmail` `live` alias (Phase 4) | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<webmail api>/*/*` (no gateway authorizer; the server's own session checks protect the application) |
-| `s3mail-webmail` ECR repository (Phase 4) | `lambda.amazonaws.com` | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | `aws:sourceArn` like `arn:aws:lambda:<region>:<account>:function:s3mail-webmail*` |
+| `s3mail-webmail` `live` alias (deferred) | `apigateway.amazonaws.com` | `lambda:InvokeFunction` | `AWS:SourceAccount`; source ARN `<webmail api>/*/*` (no gateway authorizer; the server's own session checks protect the application) |
+| `s3mail-webmail` ECR repository (deferred) | `lambda.amazonaws.com` | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` | `aws:sourceArn` like `arn:aws:lambda:<region>:<account>:function:s3mail-webmail*` |
 
-Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues; see [the evidence finding](../evidence/phase0-ses-receiving.md#findings).
+Same-account identities with IAM permissions, such as the owner's admin session, can still send to the queues.
 
 ## Not yet created
 
 - CI plan, code-deploy and infrastructure-deploy roles, and the permissions boundary ([CI identity](../specs/security.md#ci-identity)).
-- The owner-recovery role, which the owner chose not to create. Uploads run in the API role.
-- The Phase 0 spike roles (`spike-stream` and its authorizer) were destroyed with the spike.
+- The owner-recovery role; the owner's admin session is the recovery identity. Uploads run in the API role.
 - The agent's CI build and gated deploy roles and the evaluation runner ([agent roles](../specs/agent.md#identity-and-authorization)); evaluations run with the owner's credentials.

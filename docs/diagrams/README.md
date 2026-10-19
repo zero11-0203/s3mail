@@ -8,9 +8,9 @@
 
 ## Scope
 
-Show AWS services, external clients/relay, primary message and request paths, authoritative storage, asynchronous work and the deferred browser deployment. Mark the design as proposed until implementation evidence justifies a status change. Show aerc and the helpers as the terminal access path, and the browser webmail and the mail agent as separately deployed parts. Keep phases, priorities, stages and gates out of the diagram's labels; they live in the [roadmap](../roadmap.md).
+Show AWS services, external clients/relay, primary message and request paths, authoritative storage, asynchronous work and the deferred browser deployment. Label it as the reference design; deployed state is checked with Terraform, not the diagram. Show aerc and the helpers as the terminal access path, and the browser webmail and the mail agent as separately deployed parts. Keep priorities, stages and gates out of the diagram's labels; they live in the owning specs.
 
-The original-mail S3 bucket retains all versions permanently; relevant roles have no delete permissions. Temporary uploads and derived objects use separate disposable storage. There is no backup bucket, scheduled export job or DynamoDB PITR in the current personal-use scope. The repeated DynamoDB symbol references the same mail table. Shared-service access and supporting operations are labeled rather than drawing every connection. The bounce path groups its gateway, receiver, queue and worker. Exact permissions, limits and recovery procedures remain in their owning specs; this diagram does not replace those contracts.
+The original-mail S3 bucket retains all versions permanently; relevant roles have no delete permissions. Temporary uploads and derived objects use separate disposable storage. There is no backup bucket, scheduled export job or DynamoDB PITR in the current scope. The repeated DynamoDB symbol references the same mail table. Shared-service access and supporting operations are labeled rather than drawing every connection. The bounce path groups its gateway, receiver, queue and worker. Exact permissions, limits and recovery procedures remain in their owning specs; this diagram does not replace those contracts.
 
 ## When to update
 

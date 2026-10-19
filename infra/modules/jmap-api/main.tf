@@ -597,7 +597,7 @@ resource "aws_api_gateway_method" "route" {
 
 # Every integration streams from the function's live alias. The 29 s
 # default still caps total response time in STREAM mode, so it is raised
-# to the 15-minute maximum (docs/evidence/phase0-streaming-spike.md).
+# to the 15-minute maximum (docs/specs/jmap.md#push).
 resource "aws_api_gateway_integration" "route" {
   for_each = local.routes
 

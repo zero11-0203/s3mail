@@ -2,7 +2,7 @@
 
 The optional mail assistant of the [agent spec](../docs/specs/agent.md): a LangGraph graph on Amazon Bedrock AgentCore Runtime, with models from OpenRouter, that answers questions about the owner's mail, triages incoming mail, writes a daily digest, drafts replies and, after the owner approves each one, organises mail and sends reviewed drafts. It reaches mail only through the s3mail JMAP API with the owner's OAuth token from the AgentCore Identity token vault, and every answer cites the emails it read.
 
-**Status:** A0–A3 and the A4 agent tools are implemented, ahead of the mail system's [Phase 3 cutover](../docs/roadmap.md#agent-phases). The deployed client holds only `mail.read`, so drafts, the digest as mail and approved actions answer `scope_not_granted` until the owner [grants their scopes](../docs/operations/deployment.md#granting-agent-scopes); the A4 tools are off. No [gate](../docs/specs/agent.md#acceptance-checks) has passed in full.
+**Status:** A0–A3 and the A4 agent tools are implemented. A fresh deployment registers the agent's client with `mail.read` only, so drafts, the digest as mail and approved actions answer `scope_not_granted` until you [grant their scopes](../docs/operations/deployment.md#granting-agent-scopes), and the A4 tools stay off until you enable them. No [gate](../docs/specs/agent.md#acceptance-checks) has passed in full; the agent spec records what the reference deployment has granted.
 
 ## Layout
 

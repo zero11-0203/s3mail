@@ -1,12 +1,22 @@
 # Documentation index
 
-[Project README](../README.md) · [Architecture](architecture.md) · [Roadmap](roadmap.md)
+[Project README](../README.md) · [Architecture](architecture.md) · [Deploy guide](guides/deploy.md)
 
-**Current state:** The design is implemented in part: the Go backend and helpers, the Terraform roots and modules, and the optional Python mail agent, with tests run by `make check`. Parts are deployed for validation. No release gate counts as passed unless its owning spec records the evidence; the [roadmap](roadmap.md) tracks phases.
+**Current state:** the Go backend and helpers, the Terraform roots and modules, and the optional Python mail agent are implemented, with offline tests run by `make check`. A reference deployment runs them for validation. No acceptance check counts as passed unless its owning spec records the evidence; see the [project status](../README.md#status).
 
-Start with the [architecture](architecture.md) for the five-minute overview, then the [roadmap](roadmap.md) for implementation order and release gates. Coding agents should also read [AGENTS.md](../AGENTS.md).
+Start with the [architecture](architecture.md) for the five-minute overview. To run your own copy, follow the [guides](#guides). Contributors should read [CONTRIBUTING.md](../CONTRIBUTING.md), and coding agents also [AGENTS.md](../AGENTS.md).
 
 The [AWS architecture diagram](diagrams/aws-mail-system.drawio.svg) is embedded in the overview and editable in draw.io. Architecture changes must update it in the same change; see the [diagram maintenance guide](diagrams/README.md).
+
+## Guides
+
+For people who deploy and use s3mail.
+
+| Guide | Contents |
+| --- | --- |
+| [Deploy](guides/deploy.md) | Prerequisites, step-by-step deployment into your own AWS account, updates and troubleshooting |
+| [Usage](guides/usage.md) | Signing in, aerc setup, addresses, sending limits, failed sends and routine checks |
+| [Costs](guides/costs.md) | Estimated monthly AWS cost for idle, light, moderate and heavy use |
 
 ## Topic specifications
 
@@ -21,23 +31,9 @@ Each spec owns its requirements, failure behavior and acceptance checks. Read th
 | Cognito, endpoint/method authorization, IAM and CI trust | [Security](specs/security.md) |
 | SQLite indexing, multilingual matching, retention and cost | [Search](specs/search.md) |
 | aerc, OAuth helpers, deferred webmail and display safety | [Clients](specs/clients.md) |
-| Later LangGraph/AgentCore agent, its tools, approvals and phase gates | [Mail agent](specs/agent.md) |
+| Optional LangGraph/AgentCore agent, its tools, approvals and stage gates | [Mail agent](specs/agent.md) |
 
-## Evidence
-
-Measured Phase 0 results and implementation reviews; requirements stay in the owning specs.
-
-- [REST API response streaming spike](evidence/phase0-streaming-spike.md)
-- [SES receiving](evidence/phase0-ses-receiving.md)
-- [aerc read slice](evidence/phase0-aerc-slice.md)
-- [JMAP RFC conformance review](evidence/jmap-rfc-review.md)
-- [Mail agent design and implementation review](evidence/agent-review.md)
-- [Mail agent implementation review — 2026-10-19](evidence/agent-implementation-review-2026-10-19.md)
-- [Review of the agent fixes in e69137d](evidence/agent-fix-review-e69137d.md)
-- [Review of the agent fixes in ae72106](evidence/agent-fix-review-ae72106.md)
-- [Review of the agent fixes in 48a5b2e](evidence/agent-fix-review-48a5b2e.md)
-- [Review of the agent fixes in e14c353](evidence/agent-fix-review-e14c353.md)
-- [Phase 3 gate audit](evidence/phase3-gate-audit.md)
+Each spec's **Acceptance checks** section is the release gate for its topic.
 
 ## Operations
 
@@ -48,4 +44,11 @@ Measured Phase 0 results and implementation reviews; requirements stay in the ow
 | Deployed IAM roles and resource-policy grants | [Permission inventory](operations/permissions.md) |
 | Logs, metrics, alarms, tracing and budgets | [Monitoring](operations/monitoring.md) |
 
-A requirement has one canonical home. Other documents should link to it. Update the owning spec and its acceptance checks together when behavior changes; use the roadmap for stage/priority changes. Add a short decision record under `docs/decisions/` only when a new consequential choice needs rationale beyond its owning spec.
+## Terms used in the specs
+
+- **Core system:** everything needed to receive, store, serve, search and send mail with aerc and the CLI helpers. Browser webmail and the mail agent are not part of it.
+- **Primary-mail cutover:** the point where an operator starts using a deployment for everyday mail. It should wait until the core acceptance checks pass.
+- **Deferred browser webmail:** the optional browser client hosted on Lambda. Its Terraform and image build exist, but it has not been validated, and its checks never block the core system.
+- **Agent stages A0–A4:** the mail agent's steps, each adding one class of side effect and the OAuth scope it needs; defined in the [agent spec](specs/agent.md#features).
+
+A requirement has one canonical home. Other documents should link to it. Update the owning spec and its acceptance checks together when behavior changes. Add a short decision record under `docs/decisions/` only when a new consequential choice needs rationale beyond its owning spec.

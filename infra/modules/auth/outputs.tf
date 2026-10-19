@@ -12,7 +12,7 @@ output "terminal_client_id" {
 }
 
 output "webmail_client_id" {
-  description = "The Phase 4 webmail app client, or null while none is registered."
+  description = "The browser webmail app client, or null while none is registered."
   value       = one(aws_cognito_user_pool_client.webmail[*].id)
 }
 

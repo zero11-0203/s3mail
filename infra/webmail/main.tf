@@ -1,4 +1,4 @@
-# Phase 4 webmail, a root configuration with its own state, applied
+# Browser webmail, a root configuration with its own state, applied
 # separately from infra/main (docs/operations/deployment.md#webmail-deployment).
 # infra/main only registers the webmail (Cognito app client, authorizer
 # allowlist, CORS origin) and owns the hosted zone; this root never reads

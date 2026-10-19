@@ -1,10 +1,10 @@
 # Search indexing and publication
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns text matching, the SQLite snapshot writer/reader protocol, freshness, version retention and publication cost. The index is rebuildable and never authoritative.
+**Status: implemented and deployed for validation; not every acceptance check below has passed.** See [current implementation](#current-implementation). Owns text matching, the SQLite snapshot writer/reader protocol, freshness, version retention and publication cost. The index is rebuildable and never authoritative.
 
 ## Required behavior and invariants
 

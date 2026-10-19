@@ -15,7 +15,7 @@ variable "terminal_callback_urls" {
 }
 
 variable "webmail_callback_urls" {
-  description = "Phase 4 webmail redirect URIs (exact match); empty registers no webmail app client."
+  description = "Browser webmail redirect URIs (exact match); empty registers no webmail app client."
   type        = list(string)
   default     = []
 

@@ -1,10 +1,10 @@
 # Mail agent
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md#agent-phases)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: A0–A3 and the A4 agent tools are implemented, ahead of the Phase 3 cutover at the owner's request ([roadmap](../roadmap.md#agent-phases)):** the Python package, image and tests in `agent/`, the trigger Lambda and `agent` CLI in `go/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). A0 and A1 are deployed with the A2/A3 code in the same image. The owner waived the rest of the A1 gate, the A2 draft rubric passes, and `mail.write` was granted on 2026-10-18 (runtime version 6); `mail.submit` is not granted, so sending stops with `scope_not_granted`. Semantic search is deployed with the agent's `semantic` tool on (runtime version 5); attachment text stays off. No gate below has passed in full; the checked items record their evidence. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately. Work starts only after the mail system's Phase 3 cutover; the mail system never depends on it. Phases A0–A4 and their order live in the [roadmap](../roadmap.md#agent-phases); this spec owns the design, failure behavior and gate checks.
+**Status: A0–A3 and the A4 agent tools are implemented:** the Python package, image and tests in `agent/`, the trigger Lambda and `agent` CLI in `go/`, the `infra/agent` root and the client registration in `infra/main` ([agent deployment](../operations/deployment.md#agent-deployment)). On the reference deployment, A0 and A1 run with the A2/A3 code in the same image: the rest of the A1 gate was waived, the A2 draft rubric passes and `mail.write` is granted (runtime version 6); `mail.submit` is not granted, so sending stops with `scope_not_granted`. Semantic search is on with the agent's `semantic` tool (runtime version 5); attachment text stays off. No gate below has passed in full; the checked items record their evidence. Owns the optional mail agent: a single-owner assistant built as a Python [LangGraph](https://langchain-ai.github.io/langgraph/) graph on Amazon Bedrock AgentCore. It lives in this repository (`agent/`, `infra/agent/`) but deploys separately, and the mail system never depends on it. This spec owns the agent's stages A0–A4 ([features](#features)), design, failure behavior and gate checks.
 
 ## Required behavior and invariants
 
@@ -126,9 +126,9 @@ An answer with no marker, a malformed email marker such as `[email:bad.id]`, or 
 
 ### Features
 
-Each phase adds one class of side effect and the scope it needs, granted only after the previous gate passes.
+The agent is built in stages: **A0** answers questions read-only, **A1** adds triage and a daily digest, **A2** adds drafts, **A3** adds approved actions and **A4** adds measured extensions. Each stage adds one class of side effect and the scope it needs, granted only after the previous [gate](#acceptance-checks) passes. Only webmail chat in A4 depends on the browser webmail.
 
-| Feature | What it does | Phase | Scope |
+| Feature | What it does | Stage | Scope |
 | --- | --- | --- | --- |
 | Ask the mailbox | CLI question; the agent searches and reads mail, then answers | A0 | `mail.read` |
 | Thread summary | Summarises a thread or search result set on request | A0 | `mail.read` |
@@ -147,7 +147,7 @@ Each phase adds one class of side effect and the scope it needs, granted only af
 | Semantic search | `docs_vec` in the [search index](search.md#semantic-search), exposed as the custom [`SemanticEmail/query`](jmap.md#semantic-search) method | A4 | `mail.read` |
 | Attachment text | Text from PDF and office attachments within size caps | A4 | `mail.read` |
 | MCP tool server | The JMAP tools behind AgentCore Gateway with Cedar policy (deferred) | A4 | per tool |
-| Webmail chat | Chat panel in the Phase 4 webmail (deferred to Phase 4) | A4 | per feature |
+| Webmail chat | Chat panel in the browser webmail (deferred with the webmail) | A4 | per feature |
 
 The A4 tools are switched on per runtime with `AGENT_FEATURES` (`attachments`, `semantic`; the `features` variable of `infra/agent`), each only after its evaluation passes; `semantic_search` also needs the server's `urn:s3mail:params:jmap:semantic` capability in the session.
 
@@ -162,7 +162,7 @@ Each tool is a typed Python function over one thin JMAP client; no tool accepts 
 - Keep every dependent `Email/get` within the session's `maxObjectsInGet`: search limits are clamped, and threads are read by ids in batches.
 - Retry reads on `429`, `5xx`, timeouts and dropped connections with jittered backoff; never retry a submission.
 
-| Tool | JMAP methods | Scope | Phase | Approval |
+| Tool | JMAP methods | Scope | Stage | Approval |
 | --- | --- | --- | --- | --- |
 | `search_mail` | `Email/query` (text, from, to, subject, date) + `Email/get` (headers) | `mail.read` | A0 | no |
 | `read_email` | `Email/get` with capped text body values | `mail.read` | A0 | no |
@@ -196,7 +196,7 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 | CI deploy (gated) | The `infra/agent` resources under the boundary | Reading the token vault or Memory |
 | Evaluation runner (the owner's credentials, local) | Read the model API key secret | Runtime invoke, Memory, the token vault, any mail data |
 
-**Accepted risk: shared runtime authority (owner decision, 2026-10-19).** The trigger and the owner's CLI invoke the same runtime with the same user id, and the runtime picks the mode from the payload without knowing the caller. Anyone able to misuse the trigger's credentials or execution therefore has the owner's full command authority through the runtime, within the granted scopes: `ask` over any mail, reading and changing preferences, and `act` followed by `approve` for mailbox updates. The normal event path sends only `triage`, mail cannot inject a mode, and the trigger has no direct mail, Memory or table access. The owner accepted this for `mail.read` and `mail.write` rather than run a second runtime (its own workload identity, consent and release) for triage and digest, which remains the fix; a payload field naming the caller would not be a boundary. It must be revisited before `mail.submit` is granted ([A3 gate](#a3-gate-approved-actions)), when the same authority would extend to sending ([review finding R11](../evidence/agent-implementation-review-2026-10-19.md#r11--automated-invocation-authority-also-authorizes-owner-commands)).
+**Accepted risk: shared runtime authority (accepted 2026-10-19).** The trigger and the owner's CLI invoke the same runtime with the same user id, and the runtime picks the mode from the payload without knowing the caller. Anyone able to misuse the trigger's credentials or execution therefore has the owner's full command authority through the runtime, within the granted scopes: `ask` over any mail, reading and changing preferences, and `act` followed by `approve` for mailbox updates. The normal event path sends only `triage`, mail cannot inject a mode, and the trigger has no direct mail, Memory or table access. The owner accepted this for `mail.read` and `mail.write` rather than run a second runtime (its own workload identity, consent and release) for triage and digest, which remains the fix; a payload field naming the caller would not be a boundary. It must be revisited before `mail.submit` is granted ([A3 gate](#a3-gate-approved-actions)), when the same authority would extend to sending.
 
 **Prompt-injection defences:**
 
@@ -209,7 +209,7 @@ Every agent role follows the [IAM requirements](security.md#iam-role-requirement
 
 ### State and memory
 
-| Store | Holds | Retention | Phase |
+| Store | Holds | Retention | Stage |
 | --- | --- | --- | --- |
 | AgentCore Memory, short-term | Checkpoints: messages, capped mail excerpts, pending approvals | 7-day event expiry; customer-managed KMS key | A0 |
 | AgentCore Identity token vault | The owner's tokens for the agent client | Until revoked or expired | A0 |
@@ -244,7 +244,7 @@ The suite (`agent/evals`) runs each case through the runtime's own `Handler` wit
 - **Infrastructure:** `infra/agent` is a separate root with its own state key, like `infra/webmail`. It owns the runtime and its `live` endpoint, the ECR repository, Memory, the credential provider and its secret, the model API key secret, the agent table, and from A1 the EventBridge rule on the mail system's bus, the queue and DLQ, the trigger Lambda and the optional digest schedule. `infra/main` owns only the agent's Cognito app client and allowlist entry. AWS provider 6.69.1's `aws_bedrockagentcore_*` resources cover every A0 resource. The one gap is the allowed OAuth return URLs of the workload identity the runtime creates for itself, set once with `UpdateWorkloadIdentity`; fall back to `AWS::BedrockAgentCore::*` through a CloudFormation stack only if another gap appears.
 - **Release:** build the ARM64 image separately and pass its digest. Applying it creates a candidate runtime version, which the `DEFAULT` endpoint serves while `live` stays on the approved `live_version`. The owner smoke-tests the candidate with `agent -qualifier DEFAULT`, then promotes it by setting `live_version`; rollback sets an earlier version. Terraform refuses a deployed runtime without `live_version`, so `live` never follows a new version on its own.
 - **CI:** lint, type check, unit and graph tests on every push. CI also checks that the evaluation set is consistent and synthetic. Prompt, model, tool or graph changes run the [evaluation suite](#evaluation) (`make agent-eval`) before release, and a failed threshold blocks the release; CI holds no model key, so the owner runs it.
-- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans and logs token counts per run; model HTTPS calls are not instrumented with content. The owner chose [no alarms](../operations/monitoring.md#alarms-and-dashboard): agent problems show as messages in the triage DLQ (`terraform output triage_dlq_url`), trigger Lambda errors, and `authorization_required` or `tool_not_allowed` codes in the runtime's content-free logs. The trigger logs only outcome counts. Terraform owns both endpoint log groups (`DEFAULT` and `live`) with 30-day retention, like every other log group. A separate AWS Budget filters on the `Component=agent` tag; it cannot see OpenRouter spend, so the OpenRouter key carries its own credit limit.
+- **Observability:** spans for nodes, tools and model calls with GenAI content capture off in production. ADOT's LangChain instrumentor records prompts and completions whatever the capture flag says, so its framework instrumentors stay disabled; the agent emits its own content-free tool spans and logs token counts per run; model HTTPS calls are not instrumented with content. There are [no alarms](../operations/monitoring.md#alarms-and-dashboard) by default: agent problems show as messages in the triage DLQ (`terraform output triage_dlq_url`), trigger Lambda errors, and `authorization_required` or `tool_not_allowed` codes in the runtime's content-free logs. The trigger logs only outcome counts. Terraform owns both endpoint log groups (`DEFAULT` and `live`) with 30-day retention, like every other log group. A separate AWS Budget filters on the `Component=agent` tag; it cannot see OpenRouter spend, so the OpenRouter key carries its own credit limit.
 
 ## Failure handling
 
@@ -288,7 +288,7 @@ Thresholds are starting targets, tuned once A0 produces baselines. Every check u
 - [ ] `infra/agent` applies from CI; resource-coverage gaps are listed with their fallback.
 - [x] Kill switch rehearsed: removing the allowlist entry stops the agent within five minutes.
 
-**A0 gate evidence (2026-10-18, deployed runtime version 3, after the [review fixes](../evidence/agent-review.md#resolution)):**
+**A0 gate evidence (2026-10-18, deployed runtime version 3):**
 
 - Release: version 3 was applied as a candidate on `DEFAULT` with `live` held on version 2, smoke-tested with `agent -qualifier DEFAULT` (a `[mailboxes]` answer, a follow-up in the same thread, a labelled `[no-mail]` answer), then promoted by setting `live_version = "3"` and smoke-tested again on `live`.
 - Login and refresh: asks hours after `agent login` succeeded with no new consent, while the agent client's access tokens last five minutes. On version 3, `agent login` reports the owner as already authorized; a fresh consent through the new state check has not been run yet, so the vault's return of `customState` is still unproven live.
@@ -329,7 +329,7 @@ Offline, the guard tests (`agent/tests/test_drafts.py`) refuse every draft outsi
 - [ ] Expired and rejected approvals run nothing.
 - [ ] Before `mail.submit` is granted, the owner revisits the [shared runtime authority](#identity-and-authorization) risk: the automated caller is separated from owner commands at an authenticated boundary, or the risk is accepted again with sending in scope and recorded here.
 
-Offline, 34 approval test cases against the stateful fake server (`agent/tests/test_actions.py`) cover approval, rejection, expiry, a wrong or recomputed hash, a changed draft or changed emails (also between the executor's check and its write or after part of a batch, and unrelated new mail at those moments; the backend's own guard has Go tests in `go/internal/jmap/guard_test.go`), a transport failure after the send was applied, a crash after submit or after an update resumed by a second `approve`, and a rejection after a crash before or inside the executor ([2026-10-19 review](../evidence/agent-implementation-review-2026-10-19.md#resolution)): none runs an action without a matching approval, runs a rejected one, or writes twice. The gate stays open until it runs against the deployed runtime with `mail.submit`.
+Offline, 34 approval test cases against the stateful fake server (`agent/tests/test_actions.py`) cover approval, rejection, expiry, a wrong or recomputed hash, a changed draft or changed emails (also between the executor's check and its write or after part of a batch, and unrelated new mail at those moments; the backend's own guard has Go tests in `go/internal/jmap/guard_test.go`), a transport failure after the send was applied, a crash after submit or after an update resumed by a second `approve`, and a rejection after a crash before or inside the executor: none runs an action without a matching approval, runs a rejected one, or writes twice. The gate stays open until it runs against the deployed runtime with `mail.submit`.
 
 ### A4 features
 

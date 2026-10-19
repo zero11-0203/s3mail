@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [JMAP](jmap.md#core-capabilities-to-implement) · [Security](security.md#scopes)
 
-**Status:** lists what `go/internal/jmap` implements now; the [Phase 0 aerc evidence](../evidence/phase0-aerc-slice.md) records the deployed checks. Requirements stay in [JMAP](jmap.md), [storage and sync](storage-sync.md) and [security](security.md). Update this matrix in the same change as any method, limit or scope. Tests are in `go/internal/jmap/jmap_test.go` unless named otherwise.
+**Status:** lists what `go/internal/jmap` implements now. Requirements stay in [JMAP](jmap.md), [storage and sync](storage-sync.md) and [security](security.md). Update this matrix in the same change as any method, limit or scope. Tests are in `go/internal/jmap/jmap_test.go` unless named otherwise.
 
 ## Advertised session
 

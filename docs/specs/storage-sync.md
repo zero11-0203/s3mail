@@ -1,10 +1,10 @@
 # Account storage and synchronization
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: proposed; implementation and validation are pending.** Owns the account model, DynamoDB commit protocol, state/history and durable work. Alias routing lives in [mail flow](mail-flow.md); search publication lives in [search](search.md).
+**Status: implemented and deployed for validation; not every acceptance check below has passed.** Owns the account model, DynamoDB commit protocol, state/history and durable work. Alias routing lives in [mail flow](mail-flow.md); search publication lives in [search](search.md).
 
 ## Required behavior and invariants
 

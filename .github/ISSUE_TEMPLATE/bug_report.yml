@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in s3mail does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic mail and `example.com` addresses only. Do not paste real messages, access tokens, AWS account IDs, domains or secrets; redact them from logs.
+        Report security problems privately as described in SECURITY.md, not here.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Receiving (SES, ingestion)
+        - JMAP API, push or blobs
+        - Search
+        - Sending (submission, relay, bounces)
+        - mail-auth or mail-admin
+        - Terraform or deployment
+        - Mail agent
+        - Browser webmail
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, with synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit (`git rev-parse --short HEAD`), AWS region, mail client and version, operating system, and the deploy guide step if deployment failed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Redacted. s3mail's own logs are content-free; check anything else you paste.
+      render: text

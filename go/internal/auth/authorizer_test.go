@@ -12,7 +12,7 @@ import (
 func TestAuthorizer(t *testing.T) {
 	var fetches atomic.Int32
 	a := &Authorizer{Verifier: newVerifier(t, &fetches)}
-	const arn = "arn:aws:execute-api:us-east-1:111122223333:abc123/spike/GET/stream"
+	const arn = "arn:aws:execute-api:us-east-1:111122223333:abc123/v1/GET/eventsource"
 	valid := sign(keyA, map[string]any{"alg": "RS256", "kid": "a"}, accessClaims())
 
 	resp, err := a.Handle(context.Background(), events.APIGatewayCustomAuthorizerRequest{

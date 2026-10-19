@@ -25,24 +25,6 @@ variable "ingest_zip" {
   default     = "../../go/build/ingest/bootstrap.zip"
 }
 
-variable "spike_stream_enabled" {
-  description = "Deploy the Phase 0 response-streaming spike."
-  type        = bool
-  default     = false
-}
-
-variable "spike_stream_zip" {
-  description = "Path to the spike Lambda zip built by make spike-build."
-  type        = string
-  default     = "../../go/build/spike-stream/bootstrap.zip"
-}
-
-variable "spike_authorizer_zip" {
-  description = "Path to the authorizer Lambda zip built by make spike-build."
-  type        = string
-  default     = "../../go/build/authorizer/bootstrap.zip"
-}
-
 variable "auth_domain_prefix" {
   description = "Globally unique Cognito managed login domain prefix (set in terraform.tfvars)."
   type        = string
@@ -56,7 +38,7 @@ variable "terminal_callback_urls" {
 
 variable "webmail_subdomain" {
   description = <<-EOT
-    Phase 4: the webmail host under domain (e.g. "webmail"). Setting it
+    Deferred browser webmail: the host under domain (e.g. "webmail"). Setting it
     registers the webmail Cognito app client, allowlists it in the
     authorizer and allows its origin through CORS; infra/webmail deploys
     the webmail itself. Null registers nothing.

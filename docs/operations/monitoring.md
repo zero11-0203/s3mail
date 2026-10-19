@@ -1,10 +1,10 @@
 # Monitoring and telemetry
 
-[Documentation index](../README.md) · [Architecture](../architecture.md) · [Roadmap](../roadmap.md)
+[Documentation index](../README.md) · [Architecture](../architecture.md)
 
 ## Scope and status
 
-**Status: partly implemented; see [current implementation](#current-implementation).** Owns logs, metrics, alerts, tracing and cost visibility. Covers backend operations now and webmail when enabled in Phase 4.
+**Status: partly implemented; see [current implementation](#current-implementation).** Owns logs, metrics, alerts, tracing and cost visibility. Covers backend operations now and webmail when enabled.
 
 ## Required behavior and invariants
 
@@ -15,7 +15,7 @@
 
 ## Design
 
-Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**; no third-party observability service receives data. When webmail is deployed in Phase 4, its Lambda writes bounded-retention CloudWatch logs under the same privacy rule, without direct AWS mailbox data access or external analytics.
+Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**; no third-party observability service receives data. When webmail is deployed, its Lambda writes bounded-retention CloudWatch logs under the same privacy rule, without direct AWS mailbox data access or external analytics.
 
 **Privacy rule for all telemetry:** logs, metric dimensions and span attributes contain identifiers (email id, thread id, mailbox id, JMAP method, relay message id, request and trace ids) but never message bodies, subjects, attachment names, email addresses or tokens. The [security acceptance checks](../specs/security.md#acceptance-checks) enforce this.
 
@@ -34,7 +34,7 @@ Backend logging, metrics and tracing use **Amazon CloudWatch** and **AWS X-Ray**
 
 ### Alarms and dashboard
 
-- The owner chose **no alarms** for now, because each is billed. Problems are found on the dashboard, in X-Ray and with `mail-admin submissions`.
+- No alarms are created by default, because each is billed. Problems are found on the dashboard, in X-Ray and with `mail-admin submissions`.
 - If alarms are added later, they cover any DLQ entry, ingestion/outbox backlog, JMAP failures, expired send leases/unknown acceptance, relay quota, index lag over six minutes, snapshot size/cold-search latency, auth spikes, missing work-recovery/GC completion, derived cleanup approaching seven days and cost budgets. Real-traffic alarms have the accepted no-traffic blind spot ([deployment policy](deployment.md#cicd)); they are not an end-to-end availability monitor. Notifications go through SNS to an **address outside this mail system** (and optionally a mobile push), so alerts still arrive when the mail system itself is broken.
 - One CloudWatch dashboard of built-in metrics shows the mail path end to end, within the free dashboard allowance (50 metrics).
 - The optional [mail agent](../specs/agent.md#deployment-and-operations) is not on this dashboard: the mail path never depends on it. Its problems show as messages in its triage DLQ (`infra/agent` output `triage_dlq_url`), trigger Lambda errors and content-free error codes in the runtime logs. A failed `EmailReceived` publish keeps the outbox entry and shows as dispatcher errors here.

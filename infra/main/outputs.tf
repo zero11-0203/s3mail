@@ -1,8 +1,3 @@
-output "spike_stream_invoke_url" {
-  description = "Stage URL for spike-probe -url, when the spike is enabled."
-  value       = one(module.spike_stream[*].invoke_url)
-}
-
 output "dns_name_servers" {
   description = "Route 53 nameservers to set at the registrar."
   value       = module.dns.name_servers

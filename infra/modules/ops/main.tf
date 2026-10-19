@@ -1,6 +1,6 @@
 # The operations dashboard (docs/operations/monitoring.md#alarms-and-dashboard).
 #
-# Built-in metrics only, and no alarms or custom metrics: the owner chose
+# Built-in metrics only, and no alarms or custom metrics by default,
 # to avoid their cost. One dashboard of up to 50 metrics is free.
 
 locals {

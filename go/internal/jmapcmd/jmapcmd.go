@@ -11,7 +11,7 @@
 // SEND_ALIASES (comma-separated local parts, never the canary), with
 // DOMAIN and the sendcmd policy variables, enables Identity and
 // EmailSubmission. CORS_ORIGIN, when set, is the one browser origin
-// allowed to read responses (the Phase 4 webmail).
+// allowed to read responses (the browser webmail).
 package jmapcmd
 
 import (

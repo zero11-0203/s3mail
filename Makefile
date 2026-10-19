@@ -5,7 +5,7 @@ GOLANGCI_LINT ?= golangci-lint
 TF_DIRS := infra/bootstrap infra/main infra/webmail infra/agent
 TF_TEST_DIRS := $(patsubst %/tests,%,$(wildcard infra/modules/*/tests))
 
-.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build spike-build agent-build webmail-image agent-check agent-eval agent-image
+.PHONY: check go-check go-fmt go-vet go-lint go-test go-vuln tf-check secrets build agent-build webmail-image agent-check agent-eval agent-image
 
 check: go-check agent-check tf-check secrets
 
@@ -61,12 +61,8 @@ secrets:
 # Lambda zips: linux/arm64 bootstrap binaries, zipped with a fixed
 # timestamp so unchanged code gives an unchanged zip hash.
 LAMBDAS := ingest authorizer jmap-api jmap-download jmap-push search-indexer search outbox-dispatcher submission-worker submission-recovery relay-webhook delivery-worker gc
-# Phase 0 streaming spike (spike function and bearer-token authorizer).
-SPIKE_LAMBDAS := spike-stream authorizer
 
 build: $(addprefix lambda-,$(LAMBDAS))
-
-spike-build: $(addprefix lambda-,$(SPIKE_LAMBDAS))
 
 # The mail agent's trigger (infra/agent, applied separately from infra/main).
 agent-build: lambda-agent-trigger
@@ -80,7 +76,7 @@ lambda-%:
 	@touch -t 202601010000 go/build/$*/bootstrap
 	@cd go/build/$* && rm -f bootstrap.zip && zip -X -q bootstrap.zip bootstrap
 
-# Phase 4 webmail image (docs/operations/deployment.md#webmail-deployment):
+# Browser webmail image (docs/operations/deployment.md#webmail-deployment):
 # linux/arm64 as a single manifest (Lambda rejects attestation indexes),
 # pushed to the infra/webmail repository under an immutable commit tag.
 # Prints the digest to set as image_digest in infra/webmail.
