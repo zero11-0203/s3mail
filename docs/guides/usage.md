@@ -67,7 +67,9 @@ aerc opens a push connection, so new mail appears without polling.
 
 Any client that supports JMAP with OAuth bearer tokens can work. It needs the full session URL above, because the API does not yet have a custom domain or the `_jmap._tcp` SRV record. A client without built-in OAuth can use `mail-auth token` if it accepts a token from a command. Only aerc is tested so far; reports for other clients are welcome.
 
-The browser webmail is deferred and not validated yet ([clients](../specs/clients.md#browser-hosting-and-client-safety)).
+### Browser webmail
+
+If you deployed the optional [browser webmail](deploy.md#optional-browser-webmail), a pinned build of [`root-fr/jmap-webmail`](https://github.com/root-fr/jmap-webmail), open the address from `terraform -chdir=infra/webmail output -raw url` and sign in with the same Cognito user. It checks for new mail by polling instead of push. See [clients](../specs/clients.md#browser-hosting-and-client-safety) for how it is hosted and handles tokens.
 
 ## Addresses
 

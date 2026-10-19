@@ -237,7 +237,7 @@ Read the plan before you apply it. Stop if it destroys or replaces the hosted zo
 
 ## Optional: browser webmail
 
-The browser webmail is deferred and not yet validated. It deploys from its own Terraform root and needs Docker to build its image; see [webmail deployment](../operations/deployment.md#webmail-deployment).
+The browser webmail deploys from its own Terraform root and needs Docker to build its image; see [webmail deployment](../operations/deployment.md#webmail-deployment).
 
 ## Optional: mail agent and semantic search
 

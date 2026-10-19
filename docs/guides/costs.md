@@ -83,7 +83,7 @@ Assumptions:
 
 | Component | Extra per month | Notes |
 | --- | --- | --- |
-| Browser webmail (deferred) | about $0.35–2 | Up to 10 retained images in ECR at $0.10 per GB (about $0.30). The webmail Lambda runs only while used, so it is often within the free tier. The webmail polls JMAP instead of using push. |
+| Browser webmail | about $0.35–2 | Up to 10 retained images in ECR at $0.10 per GB (about $0.30). The webmail Lambda runs only while used, so it is often within the free tier. The webmail polls JMAP instead of using push. |
 | Semantic search | about $0.40 plus embedding calls | One more Secrets Manager secret for the OpenRouter key; embedding calls are billed by OpenRouter per token. Off by default. |
 | Mail agent | about $1.80 plus usage | A KMS key ($1.00) and two secrets ($0.80) while deployed; AgentCore Runtime and Memory are billed per use, and model calls are billed by OpenRouter. Not estimated here; set a credit limit on the OpenRouter key. Off by default. |
 | CloudWatch alarms | $0.10 per alarm | Not created by default ([monitoring](../operations/monitoring.md#alarms-and-dashboard)) |
