@@ -190,12 +190,13 @@ s3mail starts with sending **paused**. To send through SMTP2GO:
 
    ```sh
    WEBHOOK_SECRET=$(terraform -chdir=infra/main output -json mail_outbound | jq -r .webhook_secret)
-   openssl rand -hex 32 > webhook.txt
-   aws secretsmanager put-secret-value --secret-id "$WEBHOOK_SECRET" --secret-string file://webhook.txt
+   WEBHOOK_FILE=$(mktemp)                                # private temporary file outside the checkout
+   openssl rand -hex 32 | tr -d '\n' > "$WEBHOOK_FILE"   # no trailing newline: the receiver compares the secret exactly
+   aws secretsmanager put-secret-value --secret-id "$WEBHOOK_SECRET" --secret-string "file://$WEBHOOK_FILE"
    terraform -chdir=infra/main output -json mail_outbound | jq -r .webhook_url
    ```
 
-   In SMTP2GO's webhook settings, add that URL with the header `Authorization: Bearer <contents of webhook.txt>` and the events delivered, bounce, spam and reject. Then delete `webhook.txt`.
+   In SMTP2GO's webhook settings, add that URL with the header `Authorization: Bearer <secret>`, using the output of `cat "$WEBHOOK_FILE"`, and the events delivered, bounce, spam and reject. Then delete the file with `rm "$WEBHOOK_FILE"`.
 6. Enable sending:
 
    ```sh
