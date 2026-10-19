@@ -43,11 +43,8 @@ The agent is just another JMAP client. It has its own OAuth client and scopes an
 - **AWS-specific setup:** DNS must be hosted in a new Route 53 zone that s3mail creates, and s3mail activates its own SES receipt rule set, which replaces any active one in that region.
 - **SMTP2GO** is the only relay configured today.
 - **macOS only for `mail-auth`:** the sign-in helper stores its session in the macOS Keychain.
-- **Browser webmail is not validated:** its Terraform and image build exist, but it has not been deployed.
 - **Originals can never be deleted,** by design; deleting mail in a client only hides it.
 - **No backups:** DynamoDB holds mailbox metadata without point-in-time recovery. Losing it loses flags and folders; the originals remain.
-- **Password-only sign-in:** MFA is off in the current configuration, an accepted risk described in the [security spec](docs/specs/security.md#authentication-and-authorization).
-- **No alarms by default;** problems show on the CloudWatch dashboard.
 
 ## Get started
 
